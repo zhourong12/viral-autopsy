@@ -354,13 +354,21 @@ export const ColumnAssignmentSchema = z.object({
 });
 export type ColumnAssignment = z.infer<typeof ColumnAssignmentSchema>;
 
+export const UploadedFileSchema = z.object({
+  fileName: z.string().max(200),
+  /** CSV/TSV text, or base64 for any file. */
+  content: z.string().min(1).max(15_000_000),
+  encoding: z.enum(["text", "base64"]),
+});
+export type UploadedFile = z.infer<typeof UploadedFileSchema>;
+
+/** One table, or several files that each hold one post's own export. */
+const UploadedFilesSchema = z.array(UploadedFileSchema).min(1).max(100);
+
 export const ImportFileRequestSchema = z.object({
   platform: PlatformIdSchema,
   accountName: z.string().trim().min(1).max(40),
-  fileName: z.string().max(200),
-  /** CSV/TSV text, or base64 for .xlsx. */
-  content: z.string().min(1).max(15_000_000),
-  encoding: z.enum(["text", "base64"]),
+  files: UploadedFilesSchema,
   assignment: ColumnAssignmentSchema.optional(),
 });
 
@@ -375,9 +383,7 @@ export const ImportPreviewRequestSchema = z.discriminatedUnion("kind", [
   z.object({
     kind: z.literal("file"),
     platform: PlatformIdSchema,
-    fileName: z.string().max(200),
-    content: z.string().min(1).max(15_000_000),
-    encoding: z.enum(["text", "base64"]),
+    files: UploadedFilesSchema,
     assignment: ColumnAssignmentSchema.optional(),
   }),
   z.object({
@@ -388,7 +394,9 @@ export const ImportPreviewRequestSchema = z.discriminatedUnion("kind", [
   }),
 ]);
 
-export interface ImportPreview {
+/** A table read through column mapping. */
+export interface TableImportPreview {
+  kind: "table";
   headerRow: number;
   headers: string[];
   assignment: ColumnAssignment;
@@ -406,6 +414,15 @@ export interface ImportPreview {
   notes: string[];
   fields: Array<{ id: string; label: string }>;
 }
+
+/** Files that each hold one post's export, such as Xiaohongshu's single-note download. */
+export interface PostsImportPreview {
+  kind: "posts";
+  posts: Post[];
+  notes: string[];
+}
+
+export type ImportPreview = TableImportPreview | PostsImportPreview;
 
 export const ScreenshotRequestSchema = z.object({
   platform: PlatformIdSchema,

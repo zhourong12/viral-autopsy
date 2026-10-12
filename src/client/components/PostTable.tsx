@@ -9,7 +9,7 @@ interface Props {
   onChange(posts: Post[]): void;
 }
 
-function formatNumber(value: number | null | undefined, kind: string): string {
+export function formatNumber(value: number | null | undefined, kind: string): string {
   if (value === null || value === undefined) return "";
   if (kind === "rate") return `${Math.round(value * 1000) / 10}%`;
   return String(value);

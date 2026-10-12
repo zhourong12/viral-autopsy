@@ -18,7 +18,7 @@ export interface MetricDef {
 }
 
 export type ImportPathKind = "export" | "screenshot" | "paste";
-export type ImportPathStatus = "documented" | "unverified" | "always";
+export type ImportPathStatus = "verified" | "documented" | "unverified" | "always";
 
 export interface ImportPath {
   kind: ImportPathKind;
@@ -148,8 +148,8 @@ export const platforms: Record<PlatformId, PlatformDef> = {
     importPaths: [
       {
         kind: "export",
-        status: "unverified",
-        note: "创作服务平台的数据中心能查看笔记数据，但没有查到官方导出说明。若你的后台能导出，可直接上传。",
+        status: "verified",
+        note: "数据中心可以导出每篇笔记自己的数据（每篇一个 .xlsx），一次多选上传，每个文件算一篇。“近30日观看数据”是账号汇总，不能用来解剖。已用真实导出文件核对（2026-10-12）。",
       },
       screenshot,
       paste,

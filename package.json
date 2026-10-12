@@ -54,6 +54,7 @@
     "typescript": "~5.9.2",
     "typescript-eslint": "^8.71.1",
     "vite": "^7.3.7",
-    "vitest": "^4.1.11"
+    "vitest": "^4.1.11",
+    "write-excel-file": "^4.1.1"
   }
 }

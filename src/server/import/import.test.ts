@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { platformIds, platforms } from "../../shared/platforms.js";
 import { headerSignature, previewImport, tableToPosts } from "./mapping.js";
+import { postsFromSinglePostExports, readSinglePostExport } from "./singlePost.js";
 import { decodeText, ImportError, parseDelimitedText, parseImportFile } from "./table.js";
 import { aliasMatches, parseMetricValue, parsePublishedAt } from "./values.js";
+import { accountExport, noteExport, toXlsx } from "./workbookFixtures.js";
 
 const asOf = "2026-10-12";
 
@@ -326,5 +328,84 @@ describe("account-level exports", () => {
     expect(first?.metrics.avgWatchSeconds).toBeCloseTo(15.3);
     expect(second?.metrics.coverCtr).toBeCloseTo(0.169);
     expect(second?.metrics.completionRate).toBeCloseTo(0.169);
+  });
+});
+
+describe("single-post exports", () => {
+  const note = noteExport({
+    startDay: "2026-09-23",
+    impressions: 1500,
+    views: 300,
+    ctrPercent: 20,
+  });
+
+  it("reads every sheet of a workbook whose file name lost its extension", async () => {
+    const content = (await toXlsx(note)).toString("base64");
+    const sheets = await parseImportFile("Claude Opus 5.5 上手", content, "base64");
+    expect(sheets.map((sheet) => sheet.name)).toEqual([
+      "基础数据总览",
+      "曝光数（天）",
+      "平均观看时长（小时）",
+    ]);
+    expect(sheets[1]?.table[1]).toEqual(["2026年09月23日", 1200]);
+  });
+
+  it("turns one note's export into one post", () => {
+    const post = readSinglePostExport(note, "我的笔记 (1).xlsx", "xiaohongshu", asOf);
+    expect(post?.title).toBe("我的笔记");
+    // The earliest hour on the earliest day stands in for the publish time.
+    expect(post?.publishedAt).toBe("2026-09-23T09:00");
+    expect(post?.metrics).toMatchObject({
+      impressions: 1500,
+      views: 300,
+      avgWatchSeconds: 8.5,
+      completionRate: 0,
+      follows: 2,
+    });
+    expect(post?.metrics.coverCtr).toBeCloseTo(0.2);
+  });
+
+  it("does not mistake the account export for a note", () => {
+    expect(readSinglePostExport(accountExport(), "近30日观看数据.xlsx", "xiaohongshu", asOf)).toBe(
+      null,
+    );
+  });
+
+  it("combines several note files and refuses to mix in other files", () => {
+    const second = noteExport({
+      startDay: "2026-10-02",
+      impressions: 80,
+      views: 9,
+      ctrPercent: 11,
+    });
+    const result = postsFromSinglePostExports(
+      [
+        { fileName: "第一篇.xlsx", sheets: note },
+        { fileName: "第二篇.xlsx", sheets: second },
+        { fileName: "第一篇.xlsx", sheets: note },
+      ],
+      "xiaohongshu",
+      asOf,
+    );
+    expect(result?.posts.map((post) => [post.id, post.title])).toEqual([
+      ["p1", "第一篇"],
+      ["p2", "第二篇"],
+    ]);
+    expect(result?.notes.join("")).toContain("合并了 1 个");
+
+    const table = [{ name: "", table: parseDelimitedText("标题,观看\n一,1") }];
+    expect(
+      postsFromSinglePostExports([{ fileName: "list.csv", sheets: table }], "xiaohongshu", asOf),
+    ).toBe(null);
+    expect(() =>
+      postsFromSinglePostExports(
+        [
+          { fileName: "第一篇.xlsx", sheets: note },
+          { fileName: "list.csv", sheets: table },
+        ],
+        "xiaohongshu",
+        asOf,
+      ),
+    ).toThrow(/list\.csv/);
   });
 });

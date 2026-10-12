@@ -2,6 +2,8 @@ import request from "supertest";
 import { describe, expect, it } from "vitest";
 import { createApp } from "./app.js";
 import { openDatabase } from "./db/database.js";
+import { accountExport, noteExport, toXlsx } from "./import/workbookFixtures.js";
+import type { Sheet } from "./import/table.js";
 import { AutopsyService } from "./service.js";
 
 function build(appToken: string | null = null) {
@@ -47,9 +49,13 @@ describe("API", () => {
       .send({
         platform: "xiaohongshu",
         accountName: "早餐号",
-        fileName: "notes.csv",
-        content: Buffer.from(csv).toString("base64"),
-        encoding: "base64",
+        files: [
+          {
+            fileName: "notes.csv",
+            content: Buffer.from(csv).toString("base64"),
+            encoding: "base64",
+          },
+        ],
       })
       .expect(201);
     const dataset = imported.body.dataset;
@@ -177,6 +183,55 @@ describe("column mapping API", () => {
       })
       .expect(400);
     expect(bad.body.error.code).toBe("invalid_mapping");
+  });
+});
+
+describe("single-post export API", () => {
+  async function upload(fileName: string, sheets: Sheet[]) {
+    return { fileName, content: (await toXlsx(sheets)).toString("base64"), encoding: "base64" };
+  }
+
+  it("previews and imports several note exports as one post each", async () => {
+    const app = build();
+    const files = [
+      await upload(
+        "第一篇.xlsx",
+        noteExport({ startDay: "2026-09-23", impressions: 1500, views: 300, ctrPercent: 20 }),
+      ),
+      await upload(
+        "第二篇.xlsx",
+        noteExport({ startDay: "2026-10-02", impressions: 80, views: 9, ctrPercent: 11 }),
+      ),
+    ];
+    const preview = await request(app)
+      .post("/api/imports/preview")
+      .send({ kind: "file", platform: "xiaohongshu", files })
+      .expect(200);
+    expect(preview.body.preview.kind).toBe("posts");
+    expect(preview.body.preview.posts).toHaveLength(2);
+
+    const imported = await request(app)
+      .post("/api/datasets/file")
+      .send({ platform: "xiaohongshu", accountName: "x", files })
+      .expect(201);
+    expect(imported.body.dataset.posts.map((post: { title: string }) => post.title)).toEqual([
+      "第一篇",
+      "第二篇",
+    ]);
+    expect(imported.body.dataset.confirmed).toBe(false);
+  });
+
+  it("explains the account export instead of mapping its columns", async () => {
+    const app = build();
+    const response = await request(app)
+      .post("/api/imports/preview")
+      .send({
+        kind: "file",
+        platform: "xiaohongshu",
+        files: [await upload("近30日观看数据.xlsx", accountExport())],
+      })
+      .expect(400);
+    expect(response.body.error.code).toBe("account_level");
   });
 });
 

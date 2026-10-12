@@ -1,4 +1,4 @@
-import { getPlatform, type PlatformId } from "../../shared/platforms.js";
+import { getPlatform, type MetricDef, type PlatformId } from "../../shared/platforms.js";
 import type { Cell, Table } from "./table.js";
 import { aliasMatches, parseMetricValue, parsePublishedAt } from "./values.js";
 
@@ -9,11 +9,11 @@ import { aliasMatches, parseMetricValue, parsePublishedAt } from "./values.js";
  * and explained rather than offered for column mapping.
  */
 
-function filled(row: Cell[]): Cell[] {
+export function filled(row: Cell[]): Cell[] {
   return row.filter((cell) => cell !== null && String(cell).trim() !== "");
 }
 
-function isNumberLike(cell: Cell): boolean {
+export function isNumberLike(cell: Cell): boolean {
   if (typeof cell === "number") return true;
   if (cell instanceof Date || cell === null) return false;
   return (
@@ -23,23 +23,31 @@ function isNumberLike(cell: Cell): boolean {
   );
 }
 
-/** Metric names down the first column ("曝光 | 3643"), each with a value or two beside it. */
-function isTotalsTable(table: Table, platform: PlatformId): boolean {
-  const metrics = getPlatform(platform).metrics;
-  const isMetricName = (cell: Cell) =>
-    typeof cell === "string" &&
-    metrics.some((metric) => metric.aliases.some((alias) => aliasMatches(cell, alias)));
-  const metricRows = table.filter((row) => {
+/** The platform metric a row label such as "封面点击率(%)" names, if any. */
+export function metricNamed(label: Cell, platform: PlatformId): MetricDef | null {
+  if (typeof label !== "string") return null;
+  return (
+    getPlatform(platform).metrics.find((metric) =>
+      metric.aliases.some((alias) => aliasMatches(label, alias)),
+    ) ?? null
+  );
+}
+
+/** Rows of a totals table: a metric name in the first cell, a value or two beside it. */
+export function totalsRows(
+  table: Table,
+  platform: PlatformId,
+): Array<{ label: string; metric: MetricDef; value: Cell }> {
+  return table.flatMap((row) => {
     const [label, ...values] = filled(row);
-    return (
-      label !== undefined &&
-      isMetricName(label) &&
-      values.length >= 1 &&
-      values.length <= 2 &&
-      values.every(isNumberLike)
-    );
+    const metric = metricNamed(label ?? null, platform);
+    if (!metric || values.length < 1 || values.length > 2 || !values.every(isNumberLike)) return [];
+    return [{ label: String(label), metric, value: values[0] ?? null }];
   });
-  return metricRows.length >= 2;
+}
+
+function isTotalsTable(table: Table, platform: PlatformId): boolean {
+  return totalsRows(table, platform).length >= 2;
 }
 
 /** One distinct date per row with only numbers beside it, so no column can be post titles. */
@@ -71,5 +79,5 @@ export function accountLevelMessage(
       : null;
   if (!what) return null;
   const { label, contentNoun } = getPlatform(platform);
-  return `${what}，没有分到每篇${contentNoun}，没法比较哪篇好、为什么好。请在${label}后台找按${contentNoun}列出的明细（每行一篇${contentNoun}，有标题和数据），能导出就导出；不能导出就截那个列表页，用截图导入。`;
+  return `${what}，没有分到每篇${contentNoun}，没法比较哪篇好、为什么好。请在${label}后台找按${contentNoun}列出的明细（每行一篇${contentNoun}，有标题和数据）导出；或者导出每篇${contentNoun}自己的数据，一次多选上传，每个文件算一篇；都不能导出就截${contentNoun}列表页，用截图导入。`;
 }

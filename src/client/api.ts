@@ -6,6 +6,7 @@ import type {
   ImportPreview,
   Post,
   PostLabels,
+  UploadedFile,
 } from "../shared/schemas.js";
 
 export interface DatasetView {
@@ -122,9 +123,7 @@ export const api = {
       | {
           kind: "file";
           platform: string;
-          fileName: string;
-          content: string;
-          encoding: "base64";
+          files: UploadedFile[];
           assignment?: ColumnAssignment;
         }
       | { kind: "paste"; platform: string; text: string; assignment?: ColumnAssignment },
@@ -132,9 +131,7 @@ export const api = {
   importFile: (body: {
     platform: string;
     accountName: string;
-    fileName: string;
-    content: string;
-    encoding: "base64";
+    files: UploadedFile[];
     assignment?: ColumnAssignment;
   }) => call<{ dataset: DatasetView }>("POST", "/api/datasets/file", body),
   importPaste: (body: {

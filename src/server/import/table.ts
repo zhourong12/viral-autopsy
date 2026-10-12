@@ -1,8 +1,14 @@
 import Papa from "papaparse";
-import readXlsxFile from "read-excel-file/node";
+import readXlsxFile, { readSheetNames } from "read-excel-file/node";
 
 export type Cell = string | number | Date | null;
 export type Table = Cell[][];
+
+/** One sheet of a workbook; CSV and pasted text are a single sheet with no name. */
+export interface Sheet {
+  name: string;
+  table: Table;
+}
 
 export class ImportError extends Error {
   constructor(
@@ -13,7 +19,8 @@ export class ImportError extends Error {
       | "no_header"
       | "invalid_mapping"
       | "too_many_rows"
-      | "account_level",
+      | "account_level"
+      | "mixed_files",
     message: string,
   ) {
     super(message);
@@ -33,21 +40,34 @@ export function parseDelimitedText(text: string): Table {
   return rows.map((row) => row.map((cell) => (cell === "" ? null : cell)));
 }
 
-export async function parseXlsx(buffer: Buffer): Promise<Table> {
-  let rows;
+const unreadableXlsx = "无法读取这个 Excel 文件。只支持 .xlsx；旧版 .xls 请另存为 .xlsx 或 CSV。";
+
+/** Every sheet that holds data, in workbook order. */
+export async function parseWorkbook(buffer: Buffer): Promise<Sheet[]> {
+  const sheets: Sheet[] = [];
   try {
-    rows = await readXlsxFile(buffer);
+    const names = await readSheetNames(buffer);
+    for (const [index, name] of names.entries()) {
+      const rows = await readXlsxFile(buffer, { sheet: index + 1 });
+      const table = rows
+        .map((row) =>
+          row.map((cell) => (cell === null || cell === undefined ? null : (cell as Cell))),
+        )
+        .filter((row) => row.some((cell) => cell !== null && String(cell).trim() !== ""));
+      if (table.length > 0) sheets.push({ name, table });
+    }
   } catch {
-    throw new ImportError(
-      "unreadable_file",
-      "无法读取这个 Excel 文件。只支持 .xlsx；旧版 .xls 请另存为 .xlsx 或 CSV。",
-    );
+    throw new ImportError("unreadable_file", unreadableXlsx);
   }
-  const table = rows
-    .map((row) => row.map((cell) => (cell === null || cell === undefined ? null : (cell as Cell))))
-    .filter((row) => row.some((cell) => cell !== null && String(cell).trim() !== ""));
-  if (table.length === 0) throw new ImportError("empty_file", "表格里没有数据行。");
-  return table;
+  if (sheets.length === 0) throw new ImportError("empty_file", "表格里没有数据行。");
+  return sheets;
+}
+
+/** .xlsx is a zip archive and .xls an OLE file, so files that lost their extension still open. */
+function sniff(buffer: Buffer): "xlsx" | "xls" | null {
+  if (buffer.subarray(0, 4).equals(Buffer.from([0x50, 0x4b, 0x03, 0x04]))) return "xlsx";
+  if (buffer.subarray(0, 4).equals(Buffer.from([0xd0, 0xcf, 0x11, 0xe0]))) return "xls";
+  return null;
 }
 
 /**
@@ -62,31 +82,31 @@ export function decodeText(buffer: Buffer): string {
   }
 }
 
+const xlsNotSupported = "暂不支持旧版 .xls，请在表格软件里另存为 .xlsx 或 CSV。";
+
 export async function parseImportFile(
   fileName: string,
   content: string,
   encoding: "text" | "base64",
-): Promise<Table> {
+): Promise<Sheet[]> {
+  const buffer = encoding === "base64" ? Buffer.from(content, "base64") : null;
+  const kind = buffer ? sniff(buffer) : null;
+  if (buffer && kind === "xlsx") return parseWorkbook(buffer);
+  if (kind === "xls") throw new ImportError("unsupported_file", xlsNotSupported);
   const lower = fileName.toLowerCase();
   if (lower.endsWith(".xlsx")) {
-    if (encoding !== "base64")
-      throw new ImportError("unsupported_file", "Excel 文件需要以二进制上传。");
-    return parseXlsx(Buffer.from(content, "base64"));
+    if (!buffer) throw new ImportError("unsupported_file", "Excel 文件需要以二进制上传。");
+    throw new ImportError("unreadable_file", unreadableXlsx);
   }
-  if (lower.endsWith(".xls")) {
-    throw new ImportError(
-      "unsupported_file",
-      "暂不支持旧版 .xls，请在表格软件里另存为 .xlsx 或 CSV。",
-    );
-  }
+  if (lower.endsWith(".xls")) throw new ImportError("unsupported_file", xlsNotSupported);
   if (
     lower.endsWith(".csv") ||
     lower.endsWith(".tsv") ||
     lower.endsWith(".txt") ||
     !lower.includes(".")
   ) {
-    const text = encoding === "base64" ? decodeText(Buffer.from(content, "base64")) : content;
-    return parseDelimitedText(text);
+    const text = buffer ? decodeText(buffer) : content;
+    return [{ name: "", table: parseDelimitedText(text) }];
   }
   throw new ImportError("unsupported_file", "只支持 CSV、TSV 和 .xlsx 文件。");
 }

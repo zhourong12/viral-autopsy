@@ -1,5 +1,5 @@
 import { columnAliases, getPlatform, type PlatformId } from "../../shared/platforms.js";
-import type { ColumnAssignment, ImportPreview, Post } from "../../shared/schemas.js";
+import type { ColumnAssignment, Post, TableImportPreview } from "../../shared/schemas.js";
 import { ImportError, maxRows, type Cell, type Table } from "./table.js";
 import { accountLevelMessage } from "./accountLevel.js";
 import {
@@ -308,7 +308,7 @@ export function previewImport(
   asOf: string,
   assignment: ColumnAssignment | undefined,
   fromSaved: boolean,
-): ImportPreview {
+): TableImportPreview {
   rejectAccountLevel(table, platform, asOf);
   const detected = assignment
     ? mappingFromAssignment(table, platform, assignment)
@@ -320,6 +320,7 @@ export function previewImport(
     .slice(detected.headerRow + 1, detected.headerRow + 4)
     .map((row) => Array.from({ length: width }, (_, index) => cellText(row[index]).slice(0, 40)));
   return {
+    kind: "table",
     headerRow: detected.headerRow,
     headers: detected.headers,
     assignment: assignmentOf(detected),

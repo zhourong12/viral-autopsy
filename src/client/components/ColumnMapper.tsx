@@ -1,8 +1,8 @@
-import type { ColumnAssignment, ImportPreview } from "../../shared/schemas.js";
+import type { ColumnAssignment, TableImportPreview } from "../../shared/schemas.js";
 import { Notice } from "./ui.js";
 
 interface Props {
-  preview: ImportPreview;
+  preview: TableImportPreview;
   onChange(assignment: ColumnAssignment): void;
 }
 

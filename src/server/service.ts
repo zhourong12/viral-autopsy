@@ -8,6 +8,7 @@ import type {
   ImportPreview,
   Post,
   PostLabels,
+  UploadedFile,
   UsageSummary,
 } from "../shared/schemas.js";
 import { emptyLabels } from "../shared/schemas.js";
@@ -41,7 +42,8 @@ import {
   previewImport,
   tableToPosts,
 } from "./import/mapping.js";
-import { parseDelimitedText, parseImportFile, type Table } from "./import/table.js";
+import { postsFromSinglePostExports } from "./import/singlePost.js";
+import { ImportError, parseDelimitedText, parseImportFile, type Table } from "./import/table.js";
 import { generateAccount } from "./synth/synth.js";
 
 export type Plan = "free" | "pro";
@@ -144,27 +146,40 @@ export class AutopsyService {
     this.mappings.save(platform, headerSignature(headers), assignment);
   }
 
-  private async loadTable(
-    input:
-      | { kind: "file"; fileName: string; content: string; encoding: "text" | "base64" }
-      | { kind: "paste"; text: string },
-  ): Promise<Table> {
-    return input.kind === "file"
-      ? parseImportFile(input.fileName, input.content, input.encoding)
-      : parseDelimitedText(input.text);
+  /**
+   * Files become posts directly when each is one post's own export, otherwise a lone file's
+   * first sheet is a table for column mapping. Pasted text is always a table.
+   */
+  private async loadSource(
+    input: { kind: "file"; files: UploadedFile[] } | { kind: "paste"; text: string },
+    platform: PlatformId,
+  ): Promise<{ kind: "posts"; posts: Post[]; notes: string[] } | { kind: "table"; table: Table }> {
+    if (input.kind === "paste") return { kind: "table", table: parseDelimitedText(input.text) };
+    const files = await Promise.all(
+      input.files.map(async (file) => ({
+        fileName: file.fileName,
+        sheets: await parseImportFile(file.fileName, file.content, file.encoding),
+      })),
+    );
+    const posts = postsFromSinglePostExports(files, platform, this.today());
+    if (posts) return { kind: "posts", ...posts };
+    const table = files[0]?.sheets[0]?.table;
+    if (!table) throw new ImportError("empty_file", "文件里没有数据行。");
+    return { kind: "table", table };
   }
 
-  /** How a table would be read, so the user can fix column assignments before importing. */
+  /** How the input would be read, so the user can fix column assignments before importing. */
   async previewImport(
-    input: (
-      | { kind: "file"; fileName: string; content: string; encoding: "text" | "base64" }
-      | { kind: "paste"; text: string }
-    ) & { platform: PlatformId; assignment?: ColumnAssignment },
+    input: ({ kind: "file"; files: UploadedFile[] } | { kind: "paste"; text: string }) & {
+      platform: PlatformId;
+      assignment?: ColumnAssignment;
+    },
   ): Promise<ImportPreview> {
-    const table = await this.loadTable(input);
-    const saved = input.assignment ? null : this.savedAssignment(table, input.platform);
+    const source = await this.loadSource(input, input.platform);
+    if (source.kind === "posts") return source;
+    const saved = input.assignment ? null : this.savedAssignment(source.table, input.platform);
     return previewImport(
-      table,
+      source.table,
       input.platform,
       this.today(),
       input.assignment ?? saved ?? undefined,
@@ -200,13 +215,23 @@ export class AutopsyService {
   async importFile(input: {
     platform: PlatformId;
     accountName: string;
-    fileName: string;
-    content: string;
-    encoding: "text" | "base64";
+    files: UploadedFile[];
     assignment?: ColumnAssignment;
   }): Promise<StoredDataset> {
-    const table = await parseImportFile(input.fileName, input.content, input.encoding);
-    return this.createFromTable(table, { ...input, source: "file" });
+    const source = await this.loadSource({ kind: "file", files: input.files }, input.platform);
+    if (source.kind === "table") {
+      return this.createFromTable(source.table, { ...input, source: "file" });
+    }
+    return this.datasets.create({
+      platform: input.platform,
+      accountName: input.accountName,
+      source: "file",
+      isSample: false,
+      confirmed: false,
+      posts: source.posts,
+      importNotes: source.notes,
+      asOf: this.today(),
+    });
   }
 
   importPaste(input: {

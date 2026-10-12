@@ -1,11 +1,18 @@
 import { FlaskConical, ImageUp, Loader2, Sparkles, Upload } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import type { PlatformDef } from "../../shared/platforms.js";
-import type { ColumnAssignment, ImportPreview, Post, PostLabels } from "../../shared/schemas.js";
+import type {
+  ColumnAssignment,
+  ImportPreview,
+  Post,
+  PostLabels,
+  UploadedFile,
+} from "../../shared/schemas.js";
 import { api, type DatasetView, type Health } from "../api.js";
 import { ColumnMapper } from "../components/ColumnMapper.js";
 import { LabelEditor } from "../components/LabelEditor.js";
 import { PostTable } from "../components/PostTable.js";
+import { SinglePostsPreview } from "../components/SinglePostsPreview.js";
 import { ErrorText, Notice, SampleChip } from "../components/ui.js";
 import { prepareScreenshots, readAsBase64 } from "../files.js";
 
@@ -21,6 +28,7 @@ const stepNames: Array<[Step, string]> = [
 ];
 
 const pathText: Record<string, string> = {
+  verified: "已用真实文件核对",
   documented: "有公开资料",
   unverified: "未核实",
   always: "可用",
@@ -53,7 +61,7 @@ export function NewAutopsy({ platforms, health, initialDatasetId, onReport }: Pr
   const [useAi, setUseAi] = useState(true);
   const [busy, setBusy] = useState<string | null>(null);
   const [preview, setPreview] = useState<ImportPreview | null>(null);
-  const [fileContent, setFileContent] = useState<string | null>(null);
+  const [fileContents, setFileContents] = useState<UploadedFile[] | null>(null);
   const [error, setError] = useState<unknown>(null);
 
   const aiReady = Boolean(health?.ai.configured);
@@ -95,22 +103,28 @@ export function NewAutopsy({ platforms, health, initialDatasetId, onReport }: Pr
 
   function resetPreview() {
     setPreview(null);
-    setFileContent(null);
+    setFileContents(null);
   }
 
   async function sourceFor(): Promise<
-    | { kind: "file"; fileName: string; content: string; encoding: "base64" }
-    | { kind: "paste"; text: string }
+    { kind: "file"; files: UploadedFile[] } | { kind: "paste"; text: string }
   > {
     if (tab === "paste") {
       if (!pasteText.trim()) throw new Error("请先粘贴表格内容。");
       return { kind: "paste", text: pasteText };
     }
-    const file = files[0];
-    if (!file) throw new Error("请先选择文件。");
-    const content = fileContent ?? (await readAsBase64(file));
-    setFileContent(content);
-    return { kind: "file", fileName: file.name, content, encoding: "base64" };
+    if (files.length === 0) throw new Error("请先选择文件。");
+    const contents =
+      fileContents ??
+      (await Promise.all(
+        files.map(async (file) => ({
+          fileName: file.name,
+          content: await readAsBase64(file),
+          encoding: "base64" as const,
+        })),
+      ));
+    setFileContents(contents);
+    return { kind: "file", files: contents };
   }
 
   async function loadPreview(assignment?: ColumnAssignment) {
@@ -126,7 +140,7 @@ export function NewAutopsy({ platforms, health, initialDatasetId, onReport }: Pr
       if (tab === "sample") return (await api.sample(platformId)).dataset;
       if (tab === "paste" || tab === "file") {
         const source = await sourceFor();
-        const assignment = preview?.assignment;
+        const assignment = preview?.kind === "table" ? preview.assignment : undefined;
         if (source.kind === "paste") {
           return (
             await api.importPaste({
@@ -141,9 +155,7 @@ export function NewAutopsy({ platforms, health, initialDatasetId, onReport }: Pr
           await api.importFile({
             platform: platformId,
             accountName,
-            fileName: source.fileName,
-            content: source.content,
-            encoding: "base64",
+            files: source.files,
             assignment,
           })
         ).dataset;
@@ -329,6 +341,7 @@ export function NewAutopsy({ platforms, health, initialDatasetId, onReport }: Pr
               <input
                 type="file"
                 accept=".csv,.tsv,.txt,.xlsx"
+                multiple
                 aria-label="选择表格文件"
                 onChange={(event) => {
                   setFiles(Array.from(event.target.files ?? []));
@@ -374,7 +387,10 @@ export function NewAutopsy({ platforms, health, initialDatasetId, onReport }: Pr
               篇）。数据里预埋了两条真规律和两个陷阱，用来体验解剖结果；页面会一直标注“合成示例数据”。
             </Notice>
           )}
-          {(tab === "file" || tab === "paste") && preview && (
+          {(tab === "file" || tab === "paste") && preview?.kind === "posts" && (
+            <SinglePostsPreview preview={preview} platform={platform} />
+          )}
+          {(tab === "file" || tab === "paste") && preview?.kind === "table" && (
             <section aria-labelledby="mapping-title" style={{ display: "grid", gap: 10 }}>
               <h3 id="mapping-title">列对应</h3>
               <p className="small muted">
@@ -398,7 +414,7 @@ export function NewAutopsy({ platforms, health, initialDatasetId, onReport }: Pr
               <button
                 type="button"
                 className="btn primary"
-                disabled={Boolean(busy) || (preview !== null && !preview.complete)}
+                disabled={Boolean(busy) || (preview?.kind === "table" && !preview.complete)}
                 onClick={doImport}
               >
                 {tab === "sample" ? (
@@ -406,7 +422,11 @@ export function NewAutopsy({ platforms, health, initialDatasetId, onReport }: Pr
                 ) : (
                   <Upload size={16} aria-hidden="true" />
                 )}
-                {tab === "sample" ? "生成示例账号" : preview ? "按这个对应导入" : "导入"}
+                {tab === "sample"
+                  ? "生成示例账号"
+                  : preview?.kind === "table"
+                    ? "按这个对应导入"
+                    : "导入"}
               </button>
             )}
           </div>
