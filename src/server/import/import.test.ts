@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { platformIds, platforms } from "../../shared/platforms.js";
-import { tableToPosts, aliasMatches } from "./mapping.js";
+import { aliasMatches, headerSignature, previewImport, tableToPosts } from "./mapping.js";
 import { decodeText, ImportError, parseDelimitedText, parseImportFile } from "./table.js";
 import { parseMetricValue, parsePublishedAt } from "./values.js";
 
@@ -182,5 +182,55 @@ describe("file decoding", () => {
 
   it("rejects legacy .xls with a fix the user can do", async () => {
     await expect(parseImportFile("data.xls", "AAAA", "base64")).rejects.toThrow(/另存为/);
+  });
+});
+
+describe("manual column mapping", () => {
+  // Headers nobody has an alias for, like a renamed or translated export.
+  const odd = ["名字,日子,数A,数B", "早餐 A,2026-07-01,1200,30", "早餐 B,2026-07-02,800,12"].join(
+    "\n",
+  );
+
+  it("previews an unrecognised table instead of failing", () => {
+    const preview = previewImport(parseDelimitedText(odd), "xiaohongshu", asOf, undefined, false);
+    expect(preview.complete).toBe(false);
+    expect(preview.missing.join("")).toContain("标题列");
+    expect(preview.headers).toEqual(["名字", "日子", "数A", "数B"]);
+    expect(preview.samples[0]).toEqual(["早餐 A", "2026-07-01", "1200", "30"]);
+    expect(preview.fields.map((field) => field.id)).toContain("metric:views");
+  });
+
+  it("imports with the columns the user assigned", () => {
+    const assignment = {
+      headerRow: 0,
+      columns: ["title", "publishedAt", "metric:views", "metric:likes"],
+    };
+    const result = tableToPosts(parseDelimitedText(odd), "xiaohongshu", asOf, assignment);
+    expect(result.posts[0]).toMatchObject({ title: "早餐 A", publishedAt: "2026-07-01" });
+    expect(result.posts[0]?.metrics).toMatchObject({ views: 1200, likes: 30 });
+  });
+
+  it("rejects a field assigned to two columns or an unknown field", () => {
+    const table = parseDelimitedText(odd);
+    expect(() =>
+      tableToPosts(table, "xiaohongshu", asOf, {
+        headerRow: 0,
+        columns: ["title", "title", "metric:views", null],
+      }),
+    ).toThrow(/同时对应了两列/);
+    expect(() =>
+      tableToPosts(table, "xiaohongshu", asOf, {
+        headerRow: 0,
+        columns: ["title", null, "metric:coins", null],
+      }),
+    ).toThrow(/不认识的字段/);
+  });
+
+  it("tells the user where to fix a missing title column", () => {
+    expect(() => tableToPosts(parseDelimitedText(odd), "xiaohongshu", asOf)).toThrow(/列对应/);
+  });
+
+  it("gives the same signature to the same layout regardless of spacing and width", () => {
+    expect(headerSignature(["笔记 标题", "观看"])).toBe(headerSignature(["笔记标题", "观看"]));
   });
 });

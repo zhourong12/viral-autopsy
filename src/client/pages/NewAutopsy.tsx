@@ -1,8 +1,9 @@
 import { FlaskConical, ImageUp, Loader2, Sparkles, Upload } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import type { PlatformDef } from "../../shared/platforms.js";
-import type { Post, PostLabels } from "../../shared/schemas.js";
+import type { ColumnAssignment, ImportPreview, Post, PostLabels } from "../../shared/schemas.js";
 import { api, type DatasetView, type Health } from "../api.js";
+import { ColumnMapper } from "../components/ColumnMapper.js";
 import { LabelEditor } from "../components/LabelEditor.js";
 import { PostTable } from "../components/PostTable.js";
 import { ErrorText, Notice, SampleChip } from "../components/ui.js";
@@ -51,6 +52,8 @@ export function NewAutopsy({ platforms, health, initialDatasetId, onReport }: Pr
   const [metric, setMetric] = useState<string>("");
   const [useAi, setUseAi] = useState(true);
   const [busy, setBusy] = useState<string | null>(null);
+  const [preview, setPreview] = useState<ImportPreview | null>(null);
+  const [fileContent, setFileContent] = useState<string | null>(null);
   const [error, setError] = useState<unknown>(null);
 
   const aiReady = Boolean(health?.ai.configured);
@@ -90,23 +93,58 @@ export function NewAutopsy({ platforms, health, initialDatasetId, onReport }: Pr
     }
   }
 
+  function resetPreview() {
+    setPreview(null);
+    setFileContent(null);
+  }
+
+  async function sourceFor(): Promise<
+    | { kind: "file"; fileName: string; content: string; encoding: "base64" }
+    | { kind: "paste"; text: string }
+  > {
+    if (tab === "paste") {
+      if (!pasteText.trim()) throw new Error("请先粘贴表格内容。");
+      return { kind: "paste", text: pasteText };
+    }
+    const file = files[0];
+    if (!file) throw new Error("请先选择文件。");
+    const content = fileContent ?? (await readAsBase64(file));
+    setFileContent(content);
+    return { kind: "file", fileName: file.name, content, encoding: "base64" };
+  }
+
+  async function loadPreview(assignment?: ColumnAssignment) {
+    const result = await run("正在读取表格…", async () => {
+      const source = await sourceFor();
+      return (await api.preview({ ...source, platform: platformId, assignment })).preview;
+    });
+    if (result) setPreview(result);
+  }
+
   async function doImport() {
     const result = await run("正在导入…", async () => {
       if (tab === "sample") return (await api.sample(platformId)).dataset;
-      if (tab === "paste")
-        return (await api.importPaste({ platform: platformId, accountName, text: pasteText }))
-          .dataset;
-      if (tab === "file") {
-        const file = files[0];
-        if (!file) throw new Error("请先选择文件。");
-        const content = await readAsBase64(file);
+      if (tab === "paste" || tab === "file") {
+        const source = await sourceFor();
+        const assignment = preview?.assignment;
+        if (source.kind === "paste") {
+          return (
+            await api.importPaste({
+              platform: platformId,
+              accountName,
+              text: source.text,
+              assignment,
+            })
+          ).dataset;
+        }
         return (
           await api.importFile({
             platform: platformId,
             accountName,
-            fileName: file.name,
-            content,
+            fileName: source.fileName,
+            content: source.content,
             encoding: "base64",
+            assignment,
           })
         ).dataset;
       }
@@ -264,6 +302,7 @@ export function NewAutopsy({ platforms, health, initialDatasetId, onReport }: Pr
                 onClick={() => {
                   setTab(key);
                   setFiles([]);
+                  resetPreview();
                 }}
               >
                 {name}
@@ -291,7 +330,10 @@ export function NewAutopsy({ platforms, health, initialDatasetId, onReport }: Pr
                 type="file"
                 accept=".csv,.tsv,.txt,.xlsx"
                 aria-label="选择表格文件"
-                onChange={(event) => setFiles(Array.from(event.target.files ?? []))}
+                onChange={(event) => {
+                  setFiles(Array.from(event.target.files ?? []));
+                  resetPreview();
+                }}
               />
             </div>
           )}
@@ -318,7 +360,10 @@ export function NewAutopsy({ platforms, health, initialDatasetId, onReport }: Pr
               从表格软件复制（含表头）后粘贴到这里
               <textarea
                 value={pasteText}
-                onChange={(event) => setPasteText(event.target.value)}
+                onChange={(event) => {
+                  setPasteText(event.target.value);
+                  resetPreview();
+                }}
                 placeholder={"标题\t发布时间\t观看\t点赞\n…"}
               />
             </label>
@@ -329,20 +374,41 @@ export function NewAutopsy({ platforms, health, initialDatasetId, onReport }: Pr
               篇）。数据里预埋了两条真规律和两个陷阱，用来体验解剖结果；页面会一直标注“合成示例数据”。
             </Notice>
           )}
+          {(tab === "file" || tab === "paste") && preview && (
+            <section aria-labelledby="mapping-title" style={{ display: "grid", gap: 10 }}>
+              <h3 id="mapping-title">列对应</h3>
+              <p className="small muted">
+                检查每一列被当作什么。真实导出的列名各平台不一样，认不出的列可以在这里手动指定；确认导入后会记住这种表头，下次自动套用。
+              </p>
+              <ColumnMapper preview={preview} onChange={(assignment) => loadPreview(assignment)} />
+            </section>
+          )}
           <div className="row">
-            <button
-              type="button"
-              className="btn primary"
-              disabled={Boolean(busy)}
-              onClick={doImport}
-            >
-              {tab === "sample" ? (
-                <FlaskConical size={16} aria-hidden="true" />
-              ) : (
+            {(tab === "file" || tab === "paste") && !preview ? (
+              <button
+                type="button"
+                className="btn primary"
+                disabled={Boolean(busy)}
+                onClick={() => loadPreview()}
+              >
                 <Upload size={16} aria-hidden="true" />
-              )}
-              {tab === "sample" ? "生成示例账号" : "导入"}
-            </button>
+                读取表格，核对列
+              </button>
+            ) : (
+              <button
+                type="button"
+                className="btn primary"
+                disabled={Boolean(busy) || (preview !== null && !preview.complete)}
+                onClick={doImport}
+              >
+                {tab === "sample" ? (
+                  <FlaskConical size={16} aria-hidden="true" />
+                ) : (
+                  <Upload size={16} aria-hidden="true" />
+                )}
+                {tab === "sample" ? "生成示例账号" : preview ? "按这个对应导入" : "导入"}
+              </button>
+            )}
           </div>
         </section>
       )}

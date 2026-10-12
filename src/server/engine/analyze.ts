@@ -80,7 +80,7 @@ interface Series {
   rel: Array<number | null>;
 }
 
-function daysBetween(fromIso: string, toIso: string): number {
+export function daysBetween(fromIso: string, toIso: string): number {
   const from = Date.parse(`${fromIso.slice(0, 10)}T00:00:00Z`);
   const to = Date.parse(`${toIso.slice(0, 10)}T00:00:00Z`);
   return Math.round((to - from) / 86400000);
@@ -91,7 +91,8 @@ function transform(value: number | null, kind: MetricKind): number | null {
   return kind === "rate" ? value * 100 : Math.log2(value + 1);
 }
 
-class Prepared {
+/** Posts in time order with features and growth-adjusted metric series. */
+export class Prepared {
   readonly posts: Post[];
   readonly features: FeatureTable;
   readonly timeAdjusted: boolean;
@@ -218,7 +219,7 @@ export function formatP(value: number | null): string {
   return value < 0.01 ? value.toFixed(3) : value.toFixed(2);
 }
 
-function effectFromDiff(
+export function effectFromDiff(
   diff: number,
   kind: MetricKind,
 ): { effect: number; effectKind: TestOutcome["effectKind"] } {

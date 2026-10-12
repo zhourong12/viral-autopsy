@@ -1,5 +1,5 @@
 import { columnAliases, getPlatform, type PlatformId } from "../../shared/platforms.js";
-import type { Post } from "../../shared/schemas.js";
+import type { ColumnAssignment, ImportPreview, Post } from "../../shared/schemas.js";
 import { ImportError, maxRows, type Cell, type Table } from "./table.js";
 import { normalizeHeader, parseFormat, parseMetricValue, parsePublishedAt } from "./values.js";
 
@@ -43,20 +43,27 @@ export function aliasMatches(header: string, alias: string): boolean {
 
 interface FieldSpec {
   field: string;
+  label: string;
   aliases: readonly string[];
 }
 
 function fieldSpecs(platform: PlatformId): FieldSpec[] {
   return [
-    { field: "title", aliases: columnAliases.title },
-    { field: "publishedAt", aliases: columnAliases.publishedAt },
-    { field: "format", aliases: columnAliases.format },
-    { field: "url", aliases: columnAliases.url },
+    { field: "title", label: "标题", aliases: columnAliases.title },
+    { field: "publishedAt", label: "发布时间", aliases: columnAliases.publishedAt },
+    { field: "format", label: "内容形式", aliases: columnAliases.format },
+    { field: "url", label: "链接", aliases: columnAliases.url },
     ...getPlatform(platform).metrics.map((metric) => ({
       field: `metric:${metric.key}`,
+      label: metric.label,
       aliases: metric.aliases,
     })),
   ];
+}
+
+/** Choices offered for each column in the mapping editor. */
+export function fieldOptions(platform: PlatformId): Array<{ id: string; label: string }> {
+  return fieldSpecs(platform).map((spec) => ({ id: spec.field, label: spec.label }));
 }
 
 function matchHeaders(headers: string[], platform: PlatformId): Map<string, number> {
@@ -76,43 +83,112 @@ function matchHeaders(headers: string[], platform: PlatformId): Map<string, numb
   return assigned;
 }
 
-export function detectMapping(table: Table, platform: PlatformId): MappingResult {
-  let best: { row: number; matches: Map<string, number> } | null = null;
-  for (let row = 0; row < Math.min(table.length, 10); row += 1) {
-    const headers = (table[row] ?? []).map(cellText);
-    const matches = matchHeaders(headers, platform);
-    if (!best || matches.size > best.matches.size) best = { row, matches };
-  }
-  if (!best || best.matches.size < 2 || !best.matches.has("title")) {
-    throw new ImportError(
-      "no_header",
-      "没有找到表头。表格至少需要“标题”列和一个数据列（比如阅读、播放、点赞）。",
-    );
-  }
-  const headers = (table[best.row] ?? []).map(cellText);
+function toMapping(matches: Map<string, number>): ColumnMapping {
   const metrics: Record<string, number> = {};
-  for (const [field, index] of best.matches) {
+  for (const [field, index] of matches) {
     if (field.startsWith("metric:")) metrics[field.slice("metric:".length)] = index;
   }
-  const usedColumns = new Set(best.matches.values());
   return {
-    headerRow: best.row,
+    title: matches.get("title") ?? null,
+    publishedAt: matches.get("publishedAt") ?? null,
+    format: matches.get("format") ?? null,
+    url: matches.get("url") ?? null,
+    metrics,
+  };
+}
+
+function buildResult(table: Table, headerRow: number, matches: Map<string, number>): MappingResult {
+  const headers = (table[headerRow] ?? []).map(cellText);
+  const usedColumns = new Set(matches.values());
+  return {
+    headerRow,
     headers,
-    mapping: {
-      title: best.matches.get("title") ?? null,
-      publishedAt: best.matches.get("publishedAt") ?? null,
-      format: best.matches.get("format") ?? null,
-      url: best.matches.get("url") ?? null,
-      metrics,
-    },
+    mapping: toMapping(matches),
     ignoredHeaders: headers.filter((header, index) => header && !usedColumns.has(index)),
   };
 }
 
+/** Best guess from column names. Never throws: an incomplete guess is shown for manual fixing. */
+export function detectMapping(table: Table, platform: PlatformId): MappingResult {
+  let best: { row: number; matches: Map<string, number> } = { row: 0, matches: new Map() };
+  for (let row = 0; row < Math.min(table.length, 10); row += 1) {
+    const matches = matchHeaders((table[row] ?? []).map(cellText), platform);
+    if (matches.size > best.matches.size) best = { row, matches };
+  }
+  return buildResult(table, best.row, best.matches);
+}
+
+export function isComplete(mapping: ColumnMapping): boolean {
+  return mapping.title !== null && Object.keys(mapping.metrics).length > 0;
+}
+
+function missingParts(mapping: ColumnMapping): string[] {
+  const missing: string[] = [];
+  if (mapping.title === null) missing.push("标题列");
+  if (Object.keys(mapping.metrics).length === 0)
+    missing.push("至少一个数据列（比如阅读、播放、点赞）");
+  return missing;
+}
+
+export function assignmentOf(result: MappingResult): ColumnAssignment {
+  const columns: Array<string | null> = result.headers.map(() => null);
+  const { mapping } = result;
+  for (const field of ["title", "publishedAt", "format", "url"] as const) {
+    const index = mapping[field];
+    if (index !== null) columns[index] = field;
+  }
+  for (const [key, index] of Object.entries(mapping.metrics)) columns[index] = `metric:${key}`;
+  return { headerRow: result.headerRow, columns };
+}
+
+/** Apply a user's column assignment, rejecting unknown fields and fields used twice. */
+export function mappingFromAssignment(
+  table: Table,
+  platform: PlatformId,
+  assignment: ColumnAssignment,
+): MappingResult {
+  if (assignment.headerRow >= table.length) {
+    throw new ImportError("invalid_mapping", "表头行超出了表格范围。");
+  }
+  // A header row with no columns chosen yet: start from the best guess for that row.
+  if (assignment.columns.every((field) => !field)) {
+    const headers = (table[assignment.headerRow] ?? []).map(cellText);
+    return buildResult(table, assignment.headerRow, matchHeaders(headers, platform));
+  }
+  const specs = new Map(fieldSpecs(platform).map((spec) => [spec.field, spec]));
+  const matches = new Map<string, number>();
+  assignment.columns.forEach((field, index) => {
+    if (!field) return;
+    const spec = specs.get(field);
+    if (!spec) throw new ImportError("invalid_mapping", `不认识的字段：${field}。`);
+    if (matches.has(field)) {
+      throw new ImportError("invalid_mapping", `“${spec.label}”同时对应了两列，请只保留一列。`);
+    }
+    matches.set(field, index);
+  });
+  return buildResult(table, assignment.headerRow, matches);
+}
+
+/** Identity of a header row, used to remember the user's mapping for the same export layout. */
+export function headerSignature(headers: string[]): string {
+  return headers.map((header) => normalizeHeader(header)).join("|");
+}
+
+/** Candidate header rows with their signatures, for looking up saved mappings. */
+export function headerCandidates(table: Table): Array<{ row: number; signature: string }> {
+  return table
+    .slice(0, 10)
+    .map((cells, row) => ({ row, signature: headerSignature(cells.map(cellText)) }));
+}
+
 const summaryTitles = new Set(["total", "合计", "总计", "汇总", "总和"]);
 
-export function tableToPosts(table: Table, platform: PlatformId, asOf: string): ImportResult {
-  const detected = detectMapping(table, platform);
+function parseRows(
+  table: Table,
+  detected: MappingResult,
+  platform: PlatformId,
+  asOf: string,
+): ImportResult {
   const { mapping } = detected;
   const platformDef = getPlatform(platform);
   const dataRows = table.slice(detected.headerRow + 1);
@@ -188,4 +264,58 @@ export function tableToPosts(table: Table, platform: PlatformId, asOf: string): 
     notes.push(`未使用的列：${detected.ignoredHeaders.join("、")}。`);
 
   return { posts, mapping: detected, notes };
+}
+
+/**
+ * Table to posts. With an assignment, the user's column choices are used as given; without
+ * one, column names are matched against known aliases.
+ */
+export function tableToPosts(
+  table: Table,
+  platform: PlatformId,
+  asOf: string,
+  assignment?: ColumnAssignment,
+): ImportResult {
+  const detected = assignment
+    ? mappingFromAssignment(table, platform, assignment)
+    : detectMapping(table, platform);
+  if (!isComplete(detected.mapping)) {
+    throw new ImportError(
+      "no_header",
+      `还缺${missingParts(detected.mapping).join("和")}。请在导入前的“列对应”里手动指定。`,
+    );
+  }
+  return parseRows(table, detected, platform, asOf);
+}
+
+/** What the import would look like, for the mapping editor. Never fails on missing columns. */
+export function previewImport(
+  table: Table,
+  platform: PlatformId,
+  asOf: string,
+  assignment: ColumnAssignment | undefined,
+  fromSaved: boolean,
+): ImportPreview {
+  const detected = assignment
+    ? mappingFromAssignment(table, platform, assignment)
+    : detectMapping(table, platform);
+  const complete = isComplete(detected.mapping);
+  const parsed = complete ? parseRows(table, detected, platform, asOf) : null;
+  const width = detected.headers.length;
+  const samples = table
+    .slice(detected.headerRow + 1, detected.headerRow + 4)
+    .map((row) => Array.from({ length: width }, (_, index) => cellText(row[index]).slice(0, 40)));
+  return {
+    headerRow: detected.headerRow,
+    headers: detected.headers,
+    assignment: assignmentOf(detected),
+    complete,
+    missing: missingParts(detected.mapping),
+    fromSaved,
+    samples,
+    posts: parsed ? parsed.posts.slice(0, 5) : [],
+    dataRows: Math.max(0, table.length - detected.headerRow - 1),
+    notes: parsed ? parsed.notes : [],
+    fields: fieldOptions(platform),
+  };
 }

@@ -134,9 +134,27 @@ const verdictOrder: Record<Finding["verdict"], number> = {
   insufficient: 3,
 };
 
-export function ReportPage({ reportId, onBack }: { reportId: string; onBack(): void }) {
+export function ReportPage({
+  reportId,
+  onBack,
+  onOpenExperiments,
+}: {
+  reportId: string;
+  onBack(): void;
+  onOpenExperiments(): void;
+}) {
   const [report, setReport] = useState<AnalysisReport | null>(null);
   const [error, setError] = useState<unknown>(null);
+  const [started, setStarted] = useState<Record<string, string>>({});
+
+  async function start(hypothesisId: string) {
+    try {
+      const { experiment } = await api.startExperiment({ reportId, hypothesisId });
+      setStarted((current) => ({ ...current, [hypothesisId]: experiment.startedOn }));
+    } catch (caught) {
+      setError(caught);
+    }
+  }
 
   useEffect(() => {
     setReport(null);
@@ -272,6 +290,25 @@ export function ReportPage({ reportId, onBack }: { reportId: string; onBack(): v
                     <li key={line}>{line}</li>
                   ))}
                 </ol>
+                {started[plan.hypothesisId] ? (
+                  <p className="small">
+                    已开始：{started[plan.hypothesisId]} 起发布的内容计入。{" "}
+                    <button type="button" className="btn" onClick={onOpenExperiments}>
+                      去实验页
+                    </button>
+                  </p>
+                ) : (
+                  <div>
+                    <button
+                      type="button"
+                      className="btn primary"
+                      onClick={() => start(plan.hypothesisId)}
+                    >
+                      开始这个实验
+                    </button>
+                    {report.isSample && <span className="small muted"> 示例数据只能体验流程</span>}
+                  </div>
+                )}
               </article>
             ))}
           </div>

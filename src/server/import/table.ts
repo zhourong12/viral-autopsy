@@ -7,7 +7,12 @@ export type Table = Cell[][];
 export class ImportError extends Error {
   constructor(
     readonly code:
-      "empty_file" | "unsupported_file" | "unreadable_file" | "no_header" | "too_many_rows",
+      | "empty_file"
+      | "unsupported_file"
+      | "unreadable_file"
+      | "no_header"
+      | "invalid_mapping"
+      | "too_many_rows",
     message: string,
   ) {
     super(message);

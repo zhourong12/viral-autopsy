@@ -118,3 +118,143 @@ describe("API", () => {
       .expect(200);
   });
 });
+
+describe("column mapping API", () => {
+  const odd = [
+    "名字,日子,数A",
+    ...Array.from({ length: 6 }, (_, i) => `内容 ${i},2026-06-0${i + 1},${100 + i}`),
+  ].join("\n");
+
+  it("previews, imports with a manual mapping, and remembers it for the same layout", async () => {
+    const app = build();
+    const first = await request(app)
+      .post("/api/imports/preview")
+      .send({ kind: "paste", platform: "bilibili", text: odd })
+      .expect(200);
+    expect(first.body.preview.complete).toBe(false);
+    expect(first.body.preview.fromSaved).toBe(false);
+
+    const assignment = { headerRow: 0, columns: ["title", "publishedAt", "metric:views"] };
+    await request(app)
+      .post("/api/datasets/paste")
+      .send({ platform: "bilibili", accountName: "x", text: odd })
+      .expect(400);
+    const imported = await request(app)
+      .post("/api/datasets/paste")
+      .send({ platform: "bilibili", accountName: "x", text: odd, assignment })
+      .expect(201);
+    expect(imported.body.dataset.posts).toHaveLength(6);
+
+    const again = await request(app)
+      .post("/api/imports/preview")
+      .send({ kind: "paste", platform: "bilibili", text: odd })
+      .expect(200);
+    expect(again.body.preview.fromSaved).toBe(true);
+    expect(again.body.preview.complete).toBe(true);
+    expect(again.body.preview.posts[0].metrics.views).toBe(100);
+    // Without an explicit assignment, the remembered one is used.
+    await request(app)
+      .post("/api/datasets/paste")
+      .send({ platform: "bilibili", accountName: "x", text: odd })
+      .expect(201);
+    // Another platform does not inherit it.
+    const other = await request(app)
+      .post("/api/imports/preview")
+      .send({ kind: "paste", platform: "douyin", text: odd })
+      .expect(200);
+    expect(other.body.preview.fromSaved).toBe(false);
+  });
+
+  it("rejects an invalid mapping in plain language", async () => {
+    const app = build();
+    const bad = await request(app)
+      .post("/api/datasets/paste")
+      .send({
+        platform: "bilibili",
+        accountName: "x",
+        text: odd,
+        assignment: { headerRow: 0, columns: ["title", "title", "metric:views"] },
+      })
+      .expect(400);
+    expect(bad.body.error.code).toBe("invalid_mapping");
+  });
+});
+
+describe("experiment API", () => {
+  it("starts an experiment from a report, checks it against data and records the outcome", async () => {
+    const app = build();
+    const sample = await request(app)
+      .post("/api/datasets/sample")
+      .send({ platform: "xiaohongshu" })
+      .expect(201);
+    const analysed = await request(app)
+      .post("/api/analyses")
+      .send({ datasetId: sample.body.dataset.id, useAi: false })
+      .expect(201);
+    const report = analysed.body.report;
+    expect(report.experiments.length).toBeGreaterThan(0);
+    const hypothesisId = report.experiments[0].hypothesisId;
+
+    const started = await request(app)
+      .post("/api/experiments")
+      .send({ reportId: report.id, hypothesisId })
+      .expect(201);
+    expect(started.body.experiment.status).toBe("running");
+    expect(started.body.experiment.startedOn).toBe("2026-10-12");
+    const again = await request(app)
+      .post("/api/experiments")
+      .send({ reportId: report.id, hypothesisId })
+      .expect(201);
+    expect(again.body.experiment.id).toBe(started.body.experiment.id);
+
+    // The sample's posts are all older than today, so nothing belongs to the experiment yet.
+    const checked = await request(app)
+      .post(`/api/experiments/${started.body.experiment.id}/check`)
+      .send({ datasetId: sample.body.dataset.id })
+      .expect(200);
+    expect(checked.body.experiment.result.outcome).toBe("waiting");
+
+    const list = await request(app).get("/api/experiments").expect(200);
+    expect(list.body.experiments).toHaveLength(1);
+    const abandoned = await request(app)
+      .patch(`/api/experiments/${started.body.experiment.id}`)
+      .send({ status: "abandoned" })
+      .expect(200);
+    expect(abandoned.body.experiment.status).toBe("abandoned");
+  });
+
+  it("refuses data from another platform", async () => {
+    const app = build();
+    const sample = await request(app)
+      .post("/api/datasets/sample")
+      .send({ platform: "douyin" })
+      .expect(201);
+    const report = (
+      await request(app)
+        .post("/api/analyses")
+        .send({ datasetId: sample.body.dataset.id, useAi: false })
+    ).body.report;
+    const started = await request(app)
+      .post("/api/experiments")
+      .send({
+        reportId: report.id,
+        hypothesisId: report.experiments[0].hypothesisId,
+        startedOn: "2026-06-01",
+      })
+      .expect(201);
+    const other = await request(app)
+      .post("/api/datasets/sample")
+      .send({ platform: "bilibili" })
+      .expect(201);
+    const refused = await request(app)
+      .post(`/api/experiments/${started.body.experiment.id}/check`)
+      .send({ datasetId: other.body.dataset.id })
+      .expect(400);
+    expect(refused.body.error.code).toBe("experiment_mismatch");
+    const checked = await request(app)
+      .post(`/api/experiments/${started.body.experiment.id}/check`)
+      .send({ datasetId: sample.body.dataset.id })
+      .expect(200);
+    expect(checked.body.experiment.result.rows.length).toBeGreaterThan(0);
+  });
+});

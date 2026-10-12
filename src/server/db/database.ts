@@ -54,6 +54,34 @@ export const migrations: Array<{ version: number; name: string; sql: string }> =
       CREATE INDEX usage_events_month ON usage_events (month);
     `,
   },
+  {
+    version: 2,
+    name: "saved column mappings and experiments",
+    sql: `
+      CREATE TABLE column_mappings (
+        platform TEXT NOT NULL,
+        signature TEXT NOT NULL,
+        assignment_json TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY (platform, signature)
+      );
+      CREATE TABLE experiments (
+        id TEXT PRIMARY KEY,
+        platform TEXT NOT NULL,
+        account_name TEXT NOT NULL,
+        source_report_id TEXT,
+        hypothesis_json TEXT NOT NULL,
+        plan_json TEXT NOT NULL,
+        metric TEXT NOT NULL,
+        started_on TEXT NOT NULL,
+        status TEXT NOT NULL CHECK (status IN ('running', 'finished', 'abandoned')),
+        result_json TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      CREATE INDEX experiments_created ON experiments (created_at DESC);
+    `,
+  },
 ];
 
 export function migrate(db: Db): number[] {

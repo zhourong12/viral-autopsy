@@ -2,8 +2,12 @@ import { randomUUID } from "node:crypto";
 import type { PlatformId } from "../../shared/platforms.js";
 import type {
   AnalysisReport,
+  ColumnAssignment,
   Dataset,
   DatasetSource,
+  ExperimentRecord,
+  ExperimentResult,
+  ExperimentStatus,
   Post,
   PostLabels,
   UsageSummary,
@@ -264,5 +268,136 @@ export class UsageStore {
       outputTokens: row.output,
       costUsd: Math.round(row.cost * 10000) / 10000,
     };
+  }
+}
+
+/** Column mappings the user confirmed, keyed by platform and header layout. */
+export class MappingStore {
+  constructor(private readonly db: Db) {}
+
+  get(platform: PlatformId, signature: string): ColumnAssignment | null {
+    const row = this.db
+      .prepare("SELECT assignment_json FROM column_mappings WHERE platform = ? AND signature = ?")
+      .get(platform, signature) as { assignment_json: string } | undefined;
+    return row ? (JSON.parse(row.assignment_json) as ColumnAssignment) : null;
+  }
+
+  save(platform: PlatformId, signature: string, assignment: ColumnAssignment): void {
+    this.db
+      .prepare(
+        `INSERT INTO column_mappings (platform, signature, assignment_json, updated_at) VALUES (?, ?, ?, ?)
+         ON CONFLICT (platform, signature) DO UPDATE SET assignment_json = excluded.assignment_json, updated_at = excluded.updated_at`,
+      )
+      .run(platform, signature, JSON.stringify(assignment), new Date().toISOString());
+  }
+}
+
+interface ExperimentRow {
+  id: string;
+  platform: string;
+  account_name: string;
+  source_report_id: string | null;
+  hypothesis_json: string;
+  plan_json: string;
+  metric: string;
+  started_on: string;
+  status: string;
+  result_json: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+function toExperiment(
+  row: ExperimentRow,
+  metricLabel: (platform: string, metric: string) => string,
+): ExperimentRecord {
+  return {
+    id: row.id,
+    platform: row.platform as PlatformId,
+    accountName: row.account_name,
+    sourceReportId: row.source_report_id,
+    hypothesis: JSON.parse(row.hypothesis_json) as ExperimentRecord["hypothesis"],
+    plan: JSON.parse(row.plan_json) as ExperimentRecord["plan"],
+    metric: row.metric,
+    metricLabel: metricLabel(row.platform, row.metric),
+    startedOn: row.started_on,
+    status: row.status as ExperimentStatus,
+    result: row.result_json ? (JSON.parse(row.result_json) as ExperimentResult) : null,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+export class ExperimentStore {
+  constructor(
+    private readonly db: Db,
+    private readonly metricLabel: (platform: string, metric: string) => string,
+  ) {}
+
+  create(
+    input: Omit<ExperimentRecord, "id" | "result" | "createdAt" | "updatedAt" | "metricLabel">,
+  ): ExperimentRecord {
+    const id = randomUUID();
+    const now = new Date().toISOString();
+    this.db
+      .prepare(
+        `INSERT INTO experiments (id, platform, account_name, source_report_id, hypothesis_json, plan_json, metric,
+          started_on, status, result_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)`,
+      )
+      .run(
+        id,
+        input.platform,
+        input.accountName,
+        input.sourceReportId,
+        JSON.stringify(input.hypothesis),
+        JSON.stringify(input.plan),
+        input.metric,
+        input.startedOn,
+        input.status,
+        now,
+        now,
+      );
+    return this.get(id) as ExperimentRecord;
+  }
+
+  get(id: string): ExperimentRecord | null {
+    const row = this.db.prepare("SELECT * FROM experiments WHERE id = ?").get(id) as
+      ExperimentRow | undefined;
+    return row ? toExperiment(row, this.metricLabel) : null;
+  }
+
+  list(): ExperimentRecord[] {
+    const rows = this.db
+      .prepare("SELECT * FROM experiments ORDER BY created_at DESC LIMIT 200")
+      .all() as unknown as ExperimentRow[];
+    return rows.map((row) => toExperiment(row, this.metricLabel));
+  }
+
+  findRunning(
+    accountName: string,
+    platform: PlatformId,
+    hypothesisClaim: string,
+  ): ExperimentRecord | null {
+    return (
+      this.list().find(
+        (item) =>
+          item.status === "running" &&
+          item.accountName === accountName &&
+          item.platform === platform &&
+          item.hypothesis.claim === hypothesisClaim,
+      ) ?? null
+    );
+  }
+
+  saveResult(id: string, result: ExperimentResult, status: ExperimentStatus): void {
+    this.db
+      .prepare("UPDATE experiments SET result_json = ?, status = ?, updated_at = ? WHERE id = ?")
+      .run(JSON.stringify(result), status, new Date().toISOString(), id);
+  }
+
+  setStatus(id: string, status: ExperimentStatus): void {
+    this.db
+      .prepare("UPDATE experiments SET status = ?, updated_at = ? WHERE id = ?")
+      .run(status, new Date().toISOString(), id);
   }
 }

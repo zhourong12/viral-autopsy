@@ -1,5 +1,12 @@
 import type { PlatformDef } from "../shared/platforms.js";
-import type { AnalysisReport, Post, PostLabels } from "../shared/schemas.js";
+import type {
+  AnalysisReport,
+  ColumnAssignment,
+  ExperimentRecord,
+  ImportPreview,
+  Post,
+  PostLabels,
+} from "../shared/schemas.js";
 
 export interface DatasetView {
   id: string;
@@ -110,15 +117,32 @@ export const api = {
   datasets: () => call<{ datasets: DatasetListItem[] }>("GET", "/api/datasets"),
   dataset: (id: string) => call<{ dataset: DatasetView }>("GET", `/api/datasets/${id}`),
   deleteDataset: (id: string) => call<{ deleted: boolean }>("DELETE", `/api/datasets/${id}`),
+  preview: (
+    body:
+      | {
+          kind: "file";
+          platform: string;
+          fileName: string;
+          content: string;
+          encoding: "base64";
+          assignment?: ColumnAssignment;
+        }
+      | { kind: "paste"; platform: string; text: string; assignment?: ColumnAssignment },
+  ) => call<{ preview: ImportPreview }>("POST", "/api/imports/preview", body),
   importFile: (body: {
     platform: string;
     accountName: string;
     fileName: string;
     content: string;
     encoding: "base64";
+    assignment?: ColumnAssignment;
   }) => call<{ dataset: DatasetView }>("POST", "/api/datasets/file", body),
-  importPaste: (body: { platform: string; accountName: string; text: string }) =>
-    call<{ dataset: DatasetView }>("POST", "/api/datasets/paste", body),
+  importPaste: (body: {
+    platform: string;
+    accountName: string;
+    text: string;
+    assignment?: ColumnAssignment;
+  }) => call<{ dataset: DatasetView }>("POST", "/api/datasets/paste", body),
   importScreenshots: (body: {
     platform: string;
     accountName: string;
@@ -135,6 +159,13 @@ export const api = {
     call<{ report: AnalysisReport }>("POST", "/api/analyses", body),
   analyses: () => call<{ analyses: AnalysisListItem[] }>("GET", "/api/analyses"),
   analysis: (id: string) => call<{ report: AnalysisReport }>("GET", `/api/analyses/${id}`),
+  experiments: () => call<{ experiments: ExperimentRecord[] }>("GET", "/api/experiments"),
+  startExperiment: (body: { reportId: string; hypothesisId: string }) =>
+    call<{ experiment: ExperimentRecord }>("POST", "/api/experiments", body),
+  checkExperiment: (id: string, datasetId: string) =>
+    call<{ experiment: ExperimentRecord }>("POST", `/api/experiments/${id}/check`, { datasetId }),
+  setExperimentStatus: (id: string, status: ExperimentRecord["status"]) =>
+    call<{ experiment: ExperimentRecord }>("PATCH", `/api/experiments/${id}`, { status }),
   usage: () =>
     call<{ month: { calls: number; inputTokens: number; outputTokens: number; costUsd: number } }>(
       "GET",

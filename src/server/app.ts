@@ -5,10 +5,14 @@ import { platformIds, platforms } from "../shared/platforms.js";
 import {
   AnalyzeRequestSchema,
   ConfirmRowsRequestSchema,
+  EvaluateExperimentRequestSchema,
   ImportFileRequestSchema,
   ImportPasteRequestSchema,
+  ImportPreviewRequestSchema,
   PlatformIdSchema,
   ScreenshotRequestSchema,
+  StartExperimentRequestSchema,
+  UpdateExperimentRequestSchema,
   UpdateLabelsRequestSchema,
 } from "../shared/schemas.js";
 import { AiError } from "./ai/llm.js";
@@ -36,6 +40,7 @@ const errorStatus: Record<string, number> = {
   plan_limit: 402,
   ai_not_configured: 503,
   invalid_posts: 400,
+  experiment_mismatch: 400,
   ai_auth: 502,
   ai_rate_limited: 429,
   ai_timeout: 504,
@@ -84,6 +89,11 @@ export function createApp(options: AppOptions): express.Express {
   app.delete("/api/datasets/:id", (req, res) => {
     const deleted = service.datasets.delete(req.params.id);
     res.status(deleted ? 200 : 404).json({ deleted });
+  });
+
+  app.post("/api/imports/preview", async (req, res) => {
+    const body = ImportPreviewRequestSchema.parse(req.body);
+    res.json({ preview: await service.previewImport(body) });
   });
 
   app.post("/api/datasets/file", async (req, res) => {
@@ -136,6 +146,29 @@ export function createApp(options: AppOptions): express.Express {
       return;
     }
     res.json({ report });
+  });
+
+  app.get("/api/experiments", (_req, res) => {
+    res.json({ experiments: service.experiments.list() });
+  });
+
+  app.post("/api/experiments", (req, res) => {
+    const body = StartExperimentRequestSchema.parse(req.body);
+    res.status(201).json({ experiment: service.startExperiment(body) });
+  });
+
+  app.get("/api/experiments/:id", (req, res) => {
+    res.json({ experiment: service.requireExperiment(req.params.id) });
+  });
+
+  app.post("/api/experiments/:id/check", (req, res) => {
+    const body = EvaluateExperimentRequestSchema.parse(req.body);
+    res.json({ experiment: service.checkExperiment(req.params.id, body.datasetId) });
+  });
+
+  app.patch("/api/experiments/:id", (req, res) => {
+    const body = UpdateExperimentRequestSchema.parse(req.body);
+    res.json({ experiment: service.setExperimentStatus(req.params.id, body.status) });
   });
 
   app.get("/api/usage", (_req, res) => {

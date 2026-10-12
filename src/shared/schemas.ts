@@ -232,6 +232,75 @@ export interface ExperimentPlan {
   reviewAfterDays: number;
 }
 
+export const experimentOutcomes = [
+  "supported",
+  "not_supported",
+  "inconclusive",
+  "waiting",
+] as const;
+export type ExperimentOutcome = (typeof experimentOutcomes)[number];
+
+export const experimentOutcomeLabels: Record<ExperimentOutcome, string> = {
+  supported: "实验支持",
+  not_supported: "实验不支持",
+  inconclusive: "还看不出",
+  waiting: "等待数据",
+};
+
+export interface ExperimentRow {
+  postId: string;
+  title: string;
+  publishedAt: string | null;
+  /** What the schedule asked for at this position. */
+  planned: "A" | "B" | null;
+  /** What the post actually was, read from its title and labels; null when unknown. */
+  actual: "A" | "B" | null;
+  /** True when the actual side was unknown and the planned side was assumed. */
+  assumed: boolean;
+  /** Settled long enough to count. */
+  mature: boolean;
+  /** Performance relative to nearby posts, as a ratio (counts) or points (rates). */
+  relative: number | null;
+}
+
+export interface ExperimentResult {
+  evaluatedAt: string;
+  datasetId: string;
+  outcome: ExperimentOutcome;
+  message: string;
+  nA: number;
+  nB: number;
+  nImmature: number;
+  effect: number | null;
+  effectKind: "ratio" | "points";
+  ciLow: number | null;
+  ciHigh: number | null;
+  pValue: number | null;
+  /** Posts whose actual side matched the schedule, out of posts with a known side. */
+  followed: number;
+  known: number;
+  rows: ExperimentRow[];
+}
+
+export type ExperimentStatus = "running" | "finished" | "abandoned";
+
+export interface ExperimentRecord {
+  id: string;
+  platform: z.infer<typeof PlatformIdSchema>;
+  accountName: string;
+  sourceReportId: string | null;
+  hypothesis: Hypothesis;
+  plan: ExperimentPlan;
+  metric: string;
+  metricLabel: string;
+  /** YYYY-MM-DD: posts published on or after this day belong to the experiment. */
+  startedOn: string;
+  status: ExperimentStatus;
+  result: ExperimentResult | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export type AnalysisMode = "ai" | "rules_only";
 
 export interface UsageSummary {
@@ -275,6 +344,16 @@ export interface AnalysisReport {
 // ---------------------------------------------------------------------------
 // API inputs.
 
+/**
+ * Which field each column of an imported table holds. Field ids: "title", "publishedAt",
+ * "format", "url", or "metric:<key>"; null means "ignore this column".
+ */
+export const ColumnAssignmentSchema = z.object({
+  headerRow: z.number().int().min(0).max(9),
+  columns: z.array(z.string().max(60).nullable()).max(300),
+});
+export type ColumnAssignment = z.infer<typeof ColumnAssignmentSchema>;
+
 export const ImportFileRequestSchema = z.object({
   platform: PlatformIdSchema,
   accountName: z.string().trim().min(1).max(40),
@@ -282,13 +361,51 @@ export const ImportFileRequestSchema = z.object({
   /** CSV/TSV text, or base64 for .xlsx. */
   content: z.string().min(1).max(15_000_000),
   encoding: z.enum(["text", "base64"]),
+  assignment: ColumnAssignmentSchema.optional(),
 });
 
 export const ImportPasteRequestSchema = z.object({
   platform: PlatformIdSchema,
   accountName: z.string().trim().min(1).max(40),
   text: z.string().min(1).max(2_000_000),
+  assignment: ColumnAssignmentSchema.optional(),
 });
+
+export const ImportPreviewRequestSchema = z.discriminatedUnion("kind", [
+  z.object({
+    kind: z.literal("file"),
+    platform: PlatformIdSchema,
+    fileName: z.string().max(200),
+    content: z.string().min(1).max(15_000_000),
+    encoding: z.enum(["text", "base64"]),
+    assignment: ColumnAssignmentSchema.optional(),
+  }),
+  z.object({
+    kind: z.literal("paste"),
+    platform: PlatformIdSchema,
+    text: z.string().min(1).max(2_000_000),
+    assignment: ColumnAssignmentSchema.optional(),
+  }),
+]);
+
+export interface ImportPreview {
+  headerRow: number;
+  headers: string[];
+  assignment: ColumnAssignment;
+  /** True when there is a title column and at least one metric column. */
+  complete: boolean;
+  /** What is still missing, in plain language. */
+  missing: string[];
+  /** The assignment came from a mapping the user saved for these exact headers. */
+  fromSaved: boolean;
+  /** First data rows as text, aligned with headers, so the user can see what each column holds. */
+  samples: string[][];
+  /** First parsed posts with the current assignment (empty when incomplete). */
+  posts: Post[];
+  dataRows: number;
+  notes: string[];
+  fields: Array<{ id: string; label: string }>;
+}
 
 export const ScreenshotRequestSchema = z.object({
   platform: PlatformIdSchema,
@@ -310,6 +427,24 @@ export const ConfirmRowsRequestSchema = z.object({
 
 export const UpdateLabelsRequestSchema = z.object({
   labels: z.record(z.string(), PostLabelsSchema),
+});
+
+export const StartExperimentRequestSchema = z.object({
+  reportId: z.string().min(1),
+  hypothesisId: z.string().min(1).max(64),
+  /** Defaults to today. */
+  startedOn: z
+    .string()
+    .regex(/^\d{4}-\d{2}-\d{2}$/)
+    .optional(),
+});
+
+export const EvaluateExperimentRequestSchema = z.object({
+  datasetId: z.string().min(1),
+});
+
+export const UpdateExperimentRequestSchema = z.object({
+  status: z.enum(["running", "finished", "abandoned"]),
 });
 
 export const AnalyzeRequestSchema = z.object({

@@ -1,6 +1,15 @@
 import { randomUUID } from "node:crypto";
 import { getPlatform, metricDef, type PlatformId } from "../shared/platforms.js";
-import type { AnalysisReport, Post, PostLabels, UsageSummary } from "../shared/schemas.js";
+import type {
+  AnalysisReport,
+  ColumnAssignment,
+  ExperimentRecord,
+  ExperimentStatus,
+  ImportPreview,
+  Post,
+  PostLabels,
+  UsageSummary,
+} from "../shared/schemas.js";
 import { emptyLabels } from "../shared/schemas.js";
 import { AiError, type StructuredLlm } from "./ai/llm.js";
 import {
@@ -11,15 +20,28 @@ import {
   type ScreenshotImage,
 } from "./ai/steps.js";
 import type { Db } from "./db/database.js";
-import { AnalysisStore, DatasetStore, UsageStore, type StoredDataset } from "./db/stores.js";
+import {
+  AnalysisStore,
+  DatasetStore,
+  ExperimentStore,
+  MappingStore,
+  UsageStore,
+  type StoredDataset,
+} from "./db/stores.js";
 import { runEngine } from "./engine/analyze.js";
+import { evaluateExperiment } from "./engine/experimentResult.js";
 import { prescribeExperiments } from "./engine/experiments.js";
 import { computeFeatures } from "./engine/features.js";
 import { myths } from "./engine/myths.js";
 import { countVerdicts, templateSummary } from "./engine/summary.js";
 import { buildAllowedNumbers, unverifiedNumbers } from "./guards/numberGuard.js";
-import { tableToPosts } from "./import/mapping.js";
-import { parseDelimitedText, parseImportFile } from "./import/table.js";
+import {
+  headerCandidates,
+  headerSignature,
+  previewImport,
+  tableToPosts,
+} from "./import/mapping.js";
+import { parseDelimitedText, parseImportFile, type Table } from "./import/table.js";
 import { generateAccount } from "./synth/synth.js";
 
 export type Plan = "free" | "pro";
@@ -37,7 +59,8 @@ export class ServiceError extends Error {
       | "no_metric"
       | "plan_limit"
       | "ai_not_configured"
-      | "invalid_posts",
+      | "invalid_posts"
+      | "experiment_mismatch",
     message: string,
   ) {
     super(message);
@@ -65,12 +88,19 @@ export class AutopsyService {
   readonly datasets: DatasetStore;
   readonly analyses: AnalysisStore;
   readonly usage: UsageStore;
+  readonly mappings: MappingStore;
+  readonly experiments: ExperimentStore;
   private readonly today: () => string;
 
   constructor(private readonly options: ServiceOptions) {
     this.datasets = new DatasetStore(options.db);
     this.analyses = new AnalysisStore(options.db);
     this.usage = new UsageStore(options.db);
+    this.mappings = new MappingStore(options.db);
+    this.experiments = new ExperimentStore(
+      options.db,
+      (platform, metric) => metricDef(platform as PlatformId, metric)?.label ?? metric,
+    );
     this.today = options.today ?? localToday;
   }
 
@@ -98,20 +128,67 @@ export class AutopsyService {
     return dataset;
   }
 
-  async importFile(input: {
-    platform: PlatformId;
-    accountName: string;
-    fileName: string;
-    content: string;
-    encoding: "text" | "base64";
-  }): Promise<StoredDataset> {
-    const table = await parseImportFile(input.fileName, input.content, input.encoding);
+  /** A mapping the user saved earlier for the same header layout, if any. */
+  private savedAssignment(table: Table, platform: PlatformId): ColumnAssignment | null {
+    for (const candidate of headerCandidates(table)) {
+      const saved = this.mappings.get(platform, candidate.signature);
+      if (saved && saved.headerRow === candidate.row) return saved;
+    }
+    return null;
+  }
+
+  private rememberAssignment(table: Table, platform: PlatformId, assignment: ColumnAssignment) {
+    const headers = (table[assignment.headerRow] ?? []).map((cell) =>
+      cell === null || cell === undefined ? "" : String(cell).trim(),
+    );
+    this.mappings.save(platform, headerSignature(headers), assignment);
+  }
+
+  private async loadTable(
+    input:
+      | { kind: "file"; fileName: string; content: string; encoding: "text" | "base64" }
+      | { kind: "paste"; text: string },
+  ): Promise<Table> {
+    return input.kind === "file"
+      ? parseImportFile(input.fileName, input.content, input.encoding)
+      : parseDelimitedText(input.text);
+  }
+
+  /** How a table would be read, so the user can fix column assignments before importing. */
+  async previewImport(
+    input: (
+      | { kind: "file"; fileName: string; content: string; encoding: "text" | "base64" }
+      | { kind: "paste"; text: string }
+    ) & { platform: PlatformId; assignment?: ColumnAssignment },
+  ): Promise<ImportPreview> {
+    const table = await this.loadTable(input);
+    const saved = input.assignment ? null : this.savedAssignment(table, input.platform);
+    return previewImport(
+      table,
+      input.platform,
+      this.today(),
+      input.assignment ?? saved ?? undefined,
+      saved !== null,
+    );
+  }
+
+  private createFromTable(
+    table: Table,
+    input: {
+      platform: PlatformId;
+      accountName: string;
+      assignment?: ColumnAssignment;
+      source: "file" | "paste";
+    },
+  ): StoredDataset {
     const asOf = this.today();
-    const result = tableToPosts(table, input.platform, asOf);
+    const assignment = input.assignment ?? this.savedAssignment(table, input.platform) ?? undefined;
+    const result = tableToPosts(table, input.platform, asOf, assignment);
+    if (input.assignment) this.rememberAssignment(table, input.platform, input.assignment);
     return this.datasets.create({
       platform: input.platform,
       accountName: input.accountName,
-      source: "file",
+      source: input.source,
       isSample: false,
       confirmed: false,
       posts: result.posts,
@@ -120,19 +197,25 @@ export class AutopsyService {
     });
   }
 
-  importPaste(input: { platform: PlatformId; accountName: string; text: string }): StoredDataset {
-    const asOf = this.today();
-    const result = tableToPosts(parseDelimitedText(input.text), input.platform, asOf);
-    return this.datasets.create({
-      platform: input.platform,
-      accountName: input.accountName,
-      source: "paste",
-      isSample: false,
-      confirmed: false,
-      posts: result.posts,
-      importNotes: result.notes,
-      asOf,
-    });
+  async importFile(input: {
+    platform: PlatformId;
+    accountName: string;
+    fileName: string;
+    content: string;
+    encoding: "text" | "base64";
+    assignment?: ColumnAssignment;
+  }): Promise<StoredDataset> {
+    const table = await parseImportFile(input.fileName, input.content, input.encoding);
+    return this.createFromTable(table, { ...input, source: "file" });
+  }
+
+  importPaste(input: {
+    platform: PlatformId;
+    accountName: string;
+    text: string;
+    assignment?: ColumnAssignment;
+  }): StoredDataset {
+    return this.createFromTable(parseDelimitedText(input.text), { ...input, source: "paste" });
   }
 
   /** Screenshots are used once and never stored; only the transcribed rows are kept. */
@@ -395,6 +478,74 @@ export class AutopsyService {
     this.analyses.save(report);
     this.recordUsage(reportId, "analysis", usage);
     return report;
+  }
+
+  /** Turn a prescription from a report into a running experiment. Starting twice returns the first. */
+  startExperiment(input: {
+    reportId: string;
+    hypothesisId: string;
+    startedOn?: string;
+  }): ExperimentRecord {
+    const report = this.analyses.get(input.reportId);
+    if (!report) throw new ServiceError("not_found", "找不到这份报告。");
+    const plan = report.experiments.find((item) => item.hypothesisId === input.hypothesisId);
+    const finding = report.findings.find((item) => item.hypothesis.id === input.hypothesisId);
+    if (!plan || !finding) throw new ServiceError("not_found", "这份报告里没有这个实验处方。");
+    const existing = this.experiments.findRunning(
+      report.accountName,
+      report.platform,
+      finding.hypothesis.claim,
+    );
+    if (existing) return existing;
+    return this.experiments.create({
+      platform: report.platform,
+      accountName: report.accountName,
+      sourceReportId: report.id,
+      hypothesis: finding.hypothesis,
+      plan,
+      metric: finding.metric,
+      startedOn: input.startedOn ?? this.today(),
+      status: "running",
+    });
+  }
+
+  requireExperiment(id: string): ExperimentRecord {
+    const experiment = this.experiments.get(id);
+    if (!experiment) throw new ServiceError("not_found", "找不到这个实验。");
+    return experiment;
+  }
+
+  /** Check a running experiment against freshly imported (and confirmed) data. */
+  checkExperiment(id: string, datasetId: string): ExperimentRecord {
+    const experiment = this.requireExperiment(id);
+    const dataset = this.requireDataset(datasetId);
+    if (dataset.platform !== experiment.platform) {
+      throw new ServiceError("experiment_mismatch", "这份数据和实验不是同一个平台。");
+    }
+    if (!dataset.confirmed) {
+      throw new ServiceError("not_confirmed", "请先在表格里核对并确认数据，再核对实验。");
+    }
+    const result = evaluateExperiment({
+      platform: dataset.platform,
+      posts: dataset.posts,
+      labels: dataset.labels,
+      asOf: dataset.asOf,
+      datasetId: dataset.id,
+      hypothesis: experiment.hypothesis,
+      plan: experiment.plan,
+      metric: experiment.metric,
+      startedOn: experiment.startedOn,
+      iterations: this.options.iterations,
+    });
+    const decided = result.outcome === "supported" || result.outcome === "not_supported";
+    this.experiments.saveResult(id, result, decided ? "finished" : experiment.status);
+    return this.requireExperiment(id);
+  }
+
+  setExperimentStatus(id: string, status: ExperimentStatus): ExperimentRecord {
+    this.requireExperiment(id);
+    this.experiments.setStatus(id, status);
+    return this.requireExperiment(id);
   }
 }
 
