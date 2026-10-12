@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { platformIds, platforms } from "../../shared/platforms.js";
-import { aliasMatches, headerSignature, previewImport, tableToPosts } from "./mapping.js";
+import { headerSignature, previewImport, tableToPosts } from "./mapping.js";
 import { decodeText, ImportError, parseDelimitedText, parseImportFile } from "./table.js";
-import { parseMetricValue, parsePublishedAt } from "./values.js";
+import { aliasMatches, parseMetricValue, parsePublishedAt } from "./values.js";
 
 const asOf = "2026-10-12";
 
@@ -255,5 +255,76 @@ describe("Xiaohongshu data centre names", () => {
       completionRate: 0,
     });
     expect(result.posts[0]?.metrics.coverCtr).toBeCloseTo(0.169);
+  });
+});
+
+describe("account-level exports", () => {
+  // Layout of Xiaohongshu's "近30日观看数据" Excel export (checked 2026-10-12), with made-up
+  // numbers: a totals sheet first, then one daily-trend sheet per metric.
+  const totals = [
+    ["指标", "数值"],
+    ["曝光", 1200],
+    ["观看", 300],
+    ["封面点击率(%)", 12.5],
+    ["平均观看时长(s)", 9.1],
+    ["总观看时长(s)", 2730],
+    ["总完播率(%)", 0],
+    ["曝光环比(%)", 150],
+  ];
+  const daily = [
+    ["日期", "数值"],
+    ["2026年10月11日", "0%"],
+    ["2026年10月10日", "50%"],
+    ["2026年10月09日", "6%"],
+    ["2026年10月08日", "12%"],
+  ];
+
+  it("explains a totals table instead of offering column mapping", () => {
+    expect(() => previewImport(totals, "xiaohongshu", asOf, undefined, false)).toThrow(/合计数据/);
+    const forced = { headerRow: 0, columns: ["title", "metric:views"] };
+    expect(() => tableToPosts(totals, "xiaohongshu", asOf, forced)).toThrow(/按笔记列出的明细/);
+  });
+
+  it("explains a daily trend table, whatever unit its values carry", () => {
+    const durations = [
+      ["日期", "数值"],
+      ["2026年10月09日", "26秒"],
+      ["2026年10月08日", "11秒"],
+      ["2026年10月07日", "0秒"],
+    ];
+    for (const table of [daily, durations]) {
+      try {
+        tableToPosts(table, "xiaohongshu", asOf);
+        expect.unreachable();
+      } catch (error) {
+        expect(error).toBeInstanceOf(ImportError);
+        expect((error as ImportError).code).toBe("account_level");
+        expect((error as ImportError).message).toContain("按天汇总");
+      }
+    }
+  });
+
+  it("still imports per-post tables that start with a date column", () => {
+    const table = [
+      ["发布时间", "笔记标题", "观看数"],
+      ["2026年10月01日", "第一篇", 120],
+      ["2026年10月03日", "第二篇", 80],
+      ["2026年10月05日", "第三篇", 95],
+    ];
+    expect(tableToPosts(table, "xiaohongshu", asOf).posts).toHaveLength(3);
+  });
+
+  it("reads bare numbers under a (%) header as percentages", () => {
+    const table = [
+      ["笔记标题", "观看数", "封面点击率(%)", "视频完播率", "平均观看时长(s)"],
+      ["第一篇", 548, 0.8, 0.8, 15.3],
+      ["第二篇", 120, 16.9, "16.9 %", 2],
+    ];
+    const [first, second] = tableToPosts(table, "xiaohongshu", asOf).posts;
+    expect(first?.metrics.coverCtr).toBeCloseTo(0.008);
+    expect(first?.metrics.completionRate).toBeCloseTo(0.8);
+    expect(first?.metrics.avgWatchSeconds).toBeCloseTo(15.3);
+    expect(second?.metrics.coverCtr).toBeCloseTo(0.169);
+    expect(second?.metrics.completionRate).toBeCloseTo(0.169);
   });
 });

@@ -36,7 +36,7 @@ function parseCount(text: string): number | null {
   return parsePlainNumber(stripped);
 }
 
-function parseRate(text: string): number | null {
+function parseRate(text: string, inPercent: boolean): number | null {
   const percent = text.match(/^(-?[\d.,]+)\s*%$/);
   if (percent?.[1]) {
     const value = parsePlainNumber(percent[1]);
@@ -45,7 +45,7 @@ function parseRate(text: string): number | null {
   const value = parsePlainNumber(text);
   if (value === null) return null;
   // A bare number above 1 can only be a percentage ("12.5" in a "点击率" column).
-  return value > 1 ? value / 100 : value;
+  return inPercent || value > 1 ? value / 100 : value;
 }
 
 /** Durations in seconds: "1:23", "01:02:03", "83秒", "1分23秒", "45s", "2.5min". */
@@ -66,20 +66,26 @@ function parseDuration(text: string): number | null {
   return parsePlainNumber(text);
 }
 
+/** A column header that states its numbers are percentages, like "封面点击率(%)". */
+export function headerIsPercent(header: string): boolean {
+  return /[%％]/.test(header);
+}
+
 /**
  * Turn a cell as it appears in an export or a screenshot into a number. The model never does
- * this conversion; it only transcribes the text it sees.
+ * this conversion; it only transcribes the text it sees. `inPercent` says the column header
+ * marks bare numbers as percentages, so "0.8" there is 0.8%, not 80%.
  */
-export function parseMetricValue(raw: unknown, kind: MetricKind): number | null {
+export function parseMetricValue(raw: unknown, kind: MetricKind, inPercent = false): number | null {
   if (raw === null || raw === undefined) return null;
   if (typeof raw === "number") {
     if (!Number.isFinite(raw)) return null;
-    if (kind === "rate" && raw > 1) return raw / 100;
+    if (kind === "rate" && (inPercent || raw > 1)) return raw / 100;
     return raw;
   }
   const text = toHalfWidth(String(raw)).trim();
   if (emptyMarkers.has(text.toLowerCase())) return null;
-  if (kind === "rate") return parseRate(text);
+  if (kind === "rate") return parseRate(text, inPercent);
   if (kind === "duration") return parseDuration(text);
   return parseCount(text);
 }
@@ -213,4 +219,13 @@ export function parseFormat(raw: unknown): "video" | "image" | "article" | null 
   if (/图文|图片|笔记|image|photo|carousel/.test(text)) return "image";
   if (/文章|长文|article|post/.test(text)) return "article";
   return null;
+}
+
+export function aliasMatches(header: string, alias: string): boolean {
+  const h = normalizeHeader(header);
+  const a = normalizeHeader(alias);
+  if (!h || !a) return false;
+  if (h === a) return true;
+  // "观看数(人)", "播放量(次)": the alias followed by a bracketed unit.
+  return h.startsWith(a) && /^\(.*\)$/.test(h.slice(a.length));
 }

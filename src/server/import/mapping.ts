@@ -1,7 +1,15 @@
 import { columnAliases, getPlatform, type PlatformId } from "../../shared/platforms.js";
 import type { ColumnAssignment, ImportPreview, Post } from "../../shared/schemas.js";
 import { ImportError, maxRows, type Cell, type Table } from "./table.js";
-import { normalizeHeader, parseFormat, parseMetricValue, parsePublishedAt } from "./values.js";
+import { accountLevelMessage } from "./accountLevel.js";
+import {
+  aliasMatches,
+  headerIsPercent,
+  normalizeHeader,
+  parseFormat,
+  parseMetricValue,
+  parsePublishedAt,
+} from "./values.js";
 
 export interface ColumnMapping {
   title: number | null;
@@ -30,15 +38,6 @@ function cellText(cell: Cell | undefined): string {
   if (cell === null || cell === undefined) return "";
   if (cell instanceof Date) return cell.toISOString();
   return String(cell).trim();
-}
-
-export function aliasMatches(header: string, alias: string): boolean {
-  const h = normalizeHeader(header);
-  const a = normalizeHeader(alias);
-  if (!h || !a) return false;
-  if (h === a) return true;
-  // "观看数(人)", "播放量(次)": the alias followed by a bracketed unit.
-  return h.startsWith(a) && /^\(.*\)$/.test(h.slice(a.length));
 }
 
 interface FieldSpec {
@@ -220,7 +219,14 @@ function parseRows(
     const metrics: Record<string, number | null> = {};
     for (const metric of platformDef.metrics) {
       const index = mapping.metrics[metric.key];
-      metrics[metric.key] = index === undefined ? null : parseMetricValue(row[index], metric.kind);
+      metrics[metric.key] =
+        index === undefined
+          ? null
+          : parseMetricValue(
+              row[index],
+              metric.kind,
+              headerIsPercent(detected.headers[index] ?? ""),
+            );
     }
     const hasNumber = Object.values(metrics).some((value) => value !== null);
     if (!title && !hasNumber) {
@@ -266,6 +272,12 @@ function parseRows(
   return { posts, mapping: detected, notes };
 }
 
+/** Account totals and daily trends have no per-post rows; mapping their columns only misleads. */
+function rejectAccountLevel(table: Table, platform: PlatformId, asOf: string) {
+  const message = accountLevelMessage(table, platform, asOf);
+  if (message) throw new ImportError("account_level", message);
+}
+
 /**
  * Table to posts. With an assignment, the user's column choices are used as given; without
  * one, column names are matched against known aliases.
@@ -276,6 +288,7 @@ export function tableToPosts(
   asOf: string,
   assignment?: ColumnAssignment,
 ): ImportResult {
+  rejectAccountLevel(table, platform, asOf);
   const detected = assignment
     ? mappingFromAssignment(table, platform, assignment)
     : detectMapping(table, platform);
@@ -296,6 +309,7 @@ export function previewImport(
   assignment: ColumnAssignment | undefined,
   fromSaved: boolean,
 ): ImportPreview {
+  rejectAccountLevel(table, platform, asOf);
   const detected = assignment
     ? mappingFromAssignment(table, platform, assignment)
     : detectMapping(table, platform);

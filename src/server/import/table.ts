@@ -12,7 +12,8 @@ export class ImportError extends Error {
       | "unreadable_file"
       | "no_header"
       | "invalid_mapping"
-      | "too_many_rows",
+      | "too_many_rows"
+      | "account_level",
     message: string,
   ) {
     super(message);

@@ -137,6 +137,13 @@ export const platforms: Record<PlatformId, PlatformDef> = {
         kind: "rate",
         aliases: ["视频完播率", "完播率"],
       },
+      {
+        key: "avgWatchSeconds",
+        label: "平均观看时长",
+        kind: "duration",
+        // "平均观看时长(s)" is the header in the data-centre Excel export (checked 2026-10-12).
+        aliases: ["平均观看时长", "人均观看时长", "avg watch time"],
+      },
     ],
     importPaths: [
       {
