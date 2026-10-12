@@ -1,7 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { platformIds, platforms } from "../../shared/platforms.js";
 import { headerSignature, previewImport, tableToPosts } from "./mapping.js";
-import { postsFromSinglePostExports, readSinglePostExport } from "./singlePost.js";
+import {
+  postsFromSinglePostExports,
+  readSinglePostExport,
+  stripSharedAffixes,
+} from "./singlePost.js";
 import { decodeText, ImportError, parseDelimitedText, parseImportFile } from "./table.js";
 import { aliasMatches, parseMetricValue, parsePublishedAt } from "./values.js";
 import { accountExport, noteExport, toXlsx } from "./workbookFixtures.js";
@@ -407,5 +411,46 @@ describe("single-post exports", () => {
         asOf,
       ),
     ).toThrow(/list\.csv/);
+  });
+});
+
+describe("stripSharedAffixes", () => {
+  it("removes a suffix or prefix every file name repeats after a separator", () => {
+    expect(stripSharedAffixes(["一周计划-笔记数据", "年度规划-笔记数据"])).toEqual({
+      titles: ["一周计划", "年度规划"],
+      removed: ["-笔记数据"],
+    });
+    expect(stripSharedAffixes(["小红书_早餐", "小红书_通勤", "小红书_早餐"])).toEqual({
+      titles: ["早餐", "通勤", "早餐"],
+      removed: ["小红书_"],
+    });
+  });
+
+  it("leaves titles alone when nothing shared is set off by a separator", () => {
+    const unchanged = (titles: string[]) =>
+      expect(stripSharedAffixes(titles)).toEqual({ titles, removed: [] });
+    unchanged(["早餐日记", "通勤日记"]);
+    unchanged(["A-B", "A-B"]);
+    unchanged(["一篇"]);
+    unchanged(["做饭-数据", "-数据"]);
+  });
+
+  it("is applied to several note files and reported", () => {
+    const sheets = noteExport({
+      startDay: "2026-09-23",
+      impressions: 500,
+      views: 50,
+      ctrPercent: 10,
+    });
+    const result = postsFromSinglePostExports(
+      [
+        { fileName: "早餐这样吃-笔记数据.xlsx", sheets },
+        { fileName: "通勤穿搭-笔记数据 (1).xlsx", sheets },
+      ],
+      "xiaohongshu",
+      asOf,
+    );
+    expect(result?.posts.map((post) => post.title)).toEqual(["早餐这样吃", "通勤穿搭"]);
+    expect(result?.notes.join("")).toContain("“-笔记数据”");
   });
 });

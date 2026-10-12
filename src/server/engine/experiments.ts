@@ -55,12 +55,49 @@ function scheduleLength(finding: Finding): number {
   return perSide * 2;
 }
 
+export function canExperiment(hypothesis: Hypothesis): boolean {
+  return hypothesis.controllable && variantsFor(hypothesis) !== null;
+}
+
+/** An alternating plan for one claim; the caller has checked `canExperiment`. */
+export function planExperiment(
+  hypothesis: Hypothesis,
+  length: number,
+  platform: PlatformId,
+  basis: "signal" | "starter",
+  extra: string[] = [],
+): ExperimentPlan {
+  const platformDef = getPlatform(platform);
+  const [variantA, variantB] = variantsFor(hypothesis) as [string, string];
+  const schedule = balancedSchedule(length);
+  const isTime = hypothesis.spec.kind === "feature" && timeFeatures.has(hypothesis.spec.feature);
+  const order = schedule.join(" ");
+  return {
+    hypothesisId: hypothesis.id,
+    claim: hypothesis.claim,
+    basis,
+    hypothesis,
+    schedule,
+    variantA,
+    variantB,
+    instructions: [
+      `接下来 ${schedule.length} 篇按这个顺序发：${order}（A＝${variantA}，B＝${variantB}）。`,
+      isTime
+        ? "内容照常做，只改变发布时间。"
+        : "选题、篇幅和发布时段尽量和平时一样，只改变这一处。",
+      "同一时间只做一个实验，否则分不清是谁起的作用。",
+      `每篇发布满 ${platformDef.maturityDays} 天后，把数据重新导入，再解剖一次。`,
+      ...extra,
+    ],
+    reviewAfterDays: platformDef.maturityDays,
+  };
+}
+
 /**
  * Turn promising-but-unproven findings into concrete alternating experiments. At most three,
  * strongest signal first, so the creator is not asked to change everything at once.
  */
 export function prescribeExperiments(findings: Finding[], platform: PlatformId): ExperimentPlan[] {
-  const platformDef = getPlatform(platform);
   const candidates = findings
     .filter(
       (finding) =>
@@ -72,28 +109,7 @@ export function prescribeExperiments(findings: Finding[], platform: PlatformId):
     .sort((a, b) => (a.test.pValue ?? 1) - (b.test.pValue ?? 1))
     .slice(0, 3);
 
-  return candidates.map((finding) => {
-    const [variantA, variantB] = variantsFor(finding.hypothesis) as [string, string];
-    const schedule = balancedSchedule(scheduleLength(finding));
-    const isTime =
-      finding.hypothesis.spec.kind === "feature" &&
-      timeFeatures.has(finding.hypothesis.spec.feature);
-    const order = schedule.join(" ");
-    return {
-      hypothesisId: finding.hypothesis.id,
-      claim: finding.hypothesis.claim,
-      schedule,
-      variantA,
-      variantB,
-      instructions: [
-        `接下来 ${schedule.length} 篇按这个顺序发：${order}（A＝${variantA}，B＝${variantB}）。`,
-        isTime
-          ? "内容照常做，只改变发布时间。"
-          : "选题、篇幅和发布时段尽量和平时一样，只改变这一处。",
-        "同一时间只做一个实验，否则分不清是谁起的作用。",
-        `每篇发布满 ${platformDef.maturityDays} 天后，把数据重新导入，再解剖一次。`,
-      ],
-      reviewAfterDays: platformDef.maturityDays,
-    };
-  });
+  return candidates.map((finding) =>
+    planExperiment(finding.hypothesis, scheduleLength(finding), platform, "signal"),
+  );
 }

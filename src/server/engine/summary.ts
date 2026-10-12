@@ -1,5 +1,6 @@
-import { getPlatform, type PlatformId } from "../../shared/platforms.js";
-import type { CauseOfDeath, ExperimentPlan, Finding } from "../../shared/schemas.js";
+import { comparisonText, formatMetric, standoutText } from "../../shared/format.js";
+import { getPlatform, metricDef, type PlatformId } from "../../shared/platforms.js";
+import type { CauseOfDeath, ExperimentPlan, Finding, StarterReport } from "../../shared/schemas.js";
 import { causeLabels } from "../../shared/schemas.js";
 
 export interface VerdictCounts {
@@ -64,6 +65,39 @@ export function templateSummary(
   const first = experiments[0];
   if (first) {
     parts.push(`下一步可以先验证“${first.claim}”：接下来 ${first.schedule.length} 篇交替尝试。`);
+  }
+  return parts.join("");
+}
+
+/** Summary for a new account: what it can and cannot say yet, the standout post, the next step. */
+export function starterSummary(
+  starter: StarterReport,
+  experiments: ExperimentPlan[],
+  postsTotal: number,
+  platform: PlatformId,
+  metric: string,
+): string {
+  const def = getPlatform(platform);
+  const noun = def.contentNoun;
+  const metricInfo = metricDef(platform, metric);
+  const parts = [
+    `现在有 ${postsTotal} 篇${noun}，发布满 ${def.maturityDays} 天的有 ${starter.postsSettled} 篇，还判断不了哪条说法成立：每组至少要 5 篇才能比较，一般要 ${starter.target} 篇左右才看得出稳定的规律。`,
+  ];
+  const best = starter.checkups.find(
+    (item) => !item.settling && item.value !== null && item.typical !== null,
+  );
+  if (best && metricInfo && best.value !== null && best.typical !== null) {
+    const compared = comparisonText(best.value, best.typical, metricInfo.kind);
+    let line = `目前${metricInfo.label}最高的是“${best.title}”（${formatMetric(best.value, metricInfo.kind)}${compared ? `，${compared}` : ""}）`;
+    const lead = best.standouts[0];
+    if (lead) line += `，和别的${noun}最不一样的是${standoutText(lead)}`;
+    parts.push(`${line}。这只是描述，不代表规律。`);
+  }
+  const first = experiments[0];
+  if (first) {
+    parts.push(
+      `与其等篇数攒够，不如主动验证：先做“${first.claim}”，接下来 ${first.schedule.length} 篇按顺序交替发，同一时间只做这一个。`,
+    );
   }
   return parts.join("");
 }

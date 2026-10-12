@@ -1,9 +1,11 @@
 import { CheckCircle2, CircleSlash, MinusCircle } from "lucide-react";
 import { useEffect, useState } from "react";
-import type { AnalysisReport, Finding, TestOutcome } from "../../shared/schemas.js";
+import type { PlatformDef } from "../../shared/platforms.js";
+import type { AnalysisReport, ExperimentPlan, Finding, TestOutcome } from "../../shared/schemas.js";
 import { causeLabels, doubtLabels } from "../../shared/schemas.js";
 import { api } from "../api.js";
 import { ShareCard } from "../components/ShareCard.js";
+import { StarterCheckup } from "../components/StarterCheckup.js";
 import { ErrorText, Notice, SampleChip, VerdictBadge, formatDateTime } from "../components/ui.js";
 
 function effectText(test: TestOutcome): string {
@@ -127,6 +129,66 @@ function FindingRows({
   );
 }
 
+function ExperimentCard({
+  plan,
+  first,
+  startedOn,
+  isSample,
+  onStart,
+  onOpenExperiments,
+}: {
+  plan: ExperimentPlan;
+  first: boolean;
+  startedOn: string | undefined;
+  isSample: boolean;
+  onStart(): void;
+  onOpenExperiments(): void;
+}) {
+  return (
+    <article className="experiment">
+      <div className="row">
+        {plan.basis === "starter" && (
+          <span className="chip">{plan.hypothesis?.origin === "ai" ? "AI 猜想" : "起步实验"}</span>
+        )}
+        {first && <span className="chip ai">建议先做</span>}
+      </div>
+      <h3>{plan.claim}</h3>
+      <div className="schedule" aria-label={`顺序：${plan.schedule.join("、")}`}>
+        {plan.schedule.map((slot, index) => (
+          <span key={index} className={slot === "A" ? "a" : "b"}>
+            {slot}
+          </span>
+        ))}
+      </div>
+      <p className="small">
+        A：{plan.variantA}
+        <br />
+        B：{plan.variantB}
+      </p>
+      <ol>
+        {plan.instructions.slice(1).map((line) => (
+          <li key={line}>{line}</li>
+        ))}
+      </ol>
+      {startedOn ? (
+        <p className="small">
+          已开始：{startedOn} 起发布的内容计入。{" "}
+          <button type="button" className="btn" onClick={onOpenExperiments}>
+            去实验页
+          </button>
+        </p>
+      ) : (
+        <div>
+          <button type="button" className="btn primary" onClick={onStart}>
+            开始这个实验
+          </button>
+          {isSample && <span className="small muted"> 示例数据只能体验流程</span>}
+        </div>
+      )}
+    </article>
+  );
+}
+
 const verdictOrder: Record<Finding["verdict"], number> = {
   established: 0,
   questionable: 1,
@@ -135,10 +197,12 @@ const verdictOrder: Record<Finding["verdict"], number> = {
 };
 
 export function ReportPage({
+  platforms,
   reportId,
   onBack,
   onOpenExperiments,
 }: {
+  platforms: PlatformDef[];
   reportId: string;
   onBack(): void;
   onOpenExperiments(): void;
@@ -176,6 +240,35 @@ export function ReportPage({
   const alternatives = new Map(report.alternatives.map((item) => [item.hypothesisId, item.text]));
   const count = (verdict: Finding["verdict"]) =>
     report.findings.filter((finding) => finding.verdict === verdict).length;
+  const platform = platforms.find((item) => item.id === report.platform);
+  const starter = report.starter ?? null;
+  const hasStarterPlans = report.experiments.some((plan) => plan.basis === "starter");
+  const judged = report.findings.some((finding) => finding.verdict !== "insufficient");
+
+  const experimentSection = report.experiments.length > 0 && (
+    <section className="panel" aria-labelledby="exp-title">
+      <h2 id="exp-title">实验处方</h2>
+      <p className="small muted">
+        {hasStarterPlans
+          ? "篇数还少，数据里看不出苗头，所以先验证只改一处的常见说法。一次只做一个，建议从第一个开始。"
+          : "有苗头但证据不够的说法，用接下来几篇交替验证。"}
+        A、B 按 ABBA 交错，抵消账号涨跌的影响。
+      </p>
+      <div className="experiments">
+        {report.experiments.map((plan, index) => (
+          <ExperimentCard
+            key={plan.hypothesisId}
+            plan={plan}
+            first={index === 0}
+            startedOn={started[plan.hypothesisId]}
+            isSample={report.isSample}
+            onStart={() => start(plan.hypothesisId)}
+            onOpenExperiments={onOpenExperiments}
+          />
+        ))}
+      </div>
+    </section>
+  );
 
   return (
     <div style={{ display: "grid", gap: 20 }}>
@@ -231,6 +324,11 @@ export function ReportPage({
         </div>
       </section>
 
+      {starter && platform && (
+        <StarterCheckup starter={starter} platform={platform} metric={report.metric} />
+      )}
+      {starter && experimentSection}
+
       <section className="panel" aria-labelledby="myth-title">
         <h2 id="myth-title">玄学体检单</h2>
         <p className="small muted">
@@ -263,57 +361,7 @@ export function ReportPage({
         </section>
       )}
 
-      {report.experiments.length > 0 && (
-        <section className="panel" aria-labelledby="exp-title">
-          <h2 id="exp-title">实验处方</h2>
-          <p className="small muted">
-            有苗头但证据不够的说法，用接下来几篇交替验证。A、B 按 ABBA 交错，抵消账号涨跌的影响。
-          </p>
-          <div className="experiments">
-            {report.experiments.map((plan) => (
-              <article key={plan.hypothesisId} className="experiment">
-                <h3>{plan.claim}</h3>
-                <div className="schedule" aria-label={`顺序：${plan.schedule.join("、")}`}>
-                  {plan.schedule.map((slot, index) => (
-                    <span key={index} className={slot === "A" ? "a" : "b"}>
-                      {slot}
-                    </span>
-                  ))}
-                </div>
-                <p className="small">
-                  A：{plan.variantA}
-                  <br />
-                  B：{plan.variantB}
-                </p>
-                <ol>
-                  {plan.instructions.slice(1).map((line) => (
-                    <li key={line}>{line}</li>
-                  ))}
-                </ol>
-                {started[plan.hypothesisId] ? (
-                  <p className="small">
-                    已开始：{started[plan.hypothesisId]} 起发布的内容计入。{" "}
-                    <button type="button" className="btn" onClick={onOpenExperiments}>
-                      去实验页
-                    </button>
-                  </p>
-                ) : (
-                  <div>
-                    <button
-                      type="button"
-                      className="btn primary"
-                      onClick={() => start(plan.hypothesisId)}
-                    >
-                      开始这个实验
-                    </button>
-                    {report.isSample && <span className="small muted"> 示例数据只能体验流程</span>}
-                  </div>
-                )}
-              </article>
-            ))}
-          </div>
-        </section>
-      )}
+      {!starter && experimentSection}
 
       {report.untested.length > 0 && (
         <section className="panel" aria-labelledby="untested-title">
@@ -328,10 +376,12 @@ export function ReportPage({
         </section>
       )}
 
-      <section className="panel" aria-labelledby="share-title">
-        <h2 id="share-title">分享卡</h2>
-        <ShareCard report={report} />
-      </section>
+      {(!starter || judged) && (
+        <section className="panel" aria-labelledby="share-title">
+          <h2 id="share-title">分享卡</h2>
+          <ShareCard report={report} />
+        </section>
+      )}
     </div>
   );
 }

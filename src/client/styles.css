@@ -703,3 +703,51 @@ details.how dd {
     transform: rotate(360deg);
   }
 }
+.progress {
+  height: 8px;
+  border-radius: 999px;
+  background: var(--stone);
+  overflow: hidden;
+}
+.progress span {
+  display: block;
+  height: 100%;
+  max-width: 100%;
+  background: var(--accent);
+}
+.standouts {
+  margin: 0;
+  padding-left: 1.1em;
+}
+.cell-label {
+  display: none;
+}
+@media (max-width: 640px) {
+  .checkups table,
+  .checkups tbody,
+  .checkups tr,
+  .checkups td {
+    display: block;
+  }
+  .checkups thead {
+    display: none;
+  }
+  .checkups tr {
+    border-bottom: 1px solid var(--rule);
+    padding: 8px 0;
+  }
+  .checkups tbody tr:last-child {
+    border-bottom: 0;
+  }
+  .checkups td {
+    border: 0;
+    padding: 4px 12px;
+  }
+  .checkups td.num {
+    text-align: left;
+  }
+  .checkups .cell-label {
+    display: inline;
+    color: var(--muted);
+  }
+}

@@ -221,8 +221,16 @@ export function benjaminiHochberg(pValues: readonly number[]): number[] {
  * two-sided 5% level, for data with spread `sd`. Uses the normal approximation inflated by
  * π/2, the efficiency loss of comparing medians instead of means.
  */
+/** Two-sided 5% test with 80% power. */
+const powerZ = 1.96 + 0.8416;
+
 export function neededPerGroup(sd: number, delta: number): number {
   if (!(sd > 0) || !(delta > 0)) return Number.NaN;
-  const z = 1.96 + 0.8416;
-  return Math.ceil(((2 * z * z * sd * sd) / (delta * delta)) * (Math.PI / 2));
+  return Math.ceil(((2 * powerZ * powerZ * sd * sd) / (delta * delta)) * (Math.PI / 2));
+}
+
+/** The inverse: the smallest difference `perGroup` posts per side can be expected to detect. */
+export function detectableDiff(sd: number, perGroup: number): number {
+  if (!(sd > 0) || !(perGroup > 0)) return Number.NaN;
+  return Math.sqrt(((2 * powerZ * powerZ * sd * sd) / perGroup) * (Math.PI / 2));
 }

@@ -34,7 +34,8 @@ import { evaluateExperiment } from "./engine/experimentResult.js";
 import { prescribeExperiments } from "./engine/experiments.js";
 import { computeFeatures } from "./engine/features.js";
 import { myths } from "./engine/myths.js";
-import { countVerdicts, templateSummary } from "./engine/summary.js";
+import { buildStarter, starterExperiments } from "./engine/starter.js";
+import { countVerdicts, starterSummary, templateSummary } from "./engine/summary.js";
 import { buildAllowedNumbers, unverifiedNumbers } from "./guards/numberGuard.js";
 import {
   headerCandidates,
@@ -399,13 +400,30 @@ export class AutopsyService {
       asOf: dataset.asOf,
       iterations: this.options.iterations,
     });
-    const experiments = prescribeExperiments(engine.findings, dataset.platform);
-    const fallbackSummary = templateSummary(
-      engine.findings,
-      experiments,
-      engine.postsUsed,
+    const starter = buildStarter(
       dataset.platform,
+      dataset.posts,
+      metric,
+      dataset.asOf,
+      engine.postsUsed,
     );
+    const signals = prescribeExperiments(engine.findings, dataset.platform);
+    const experiments = starter
+      ? [
+          ...signals,
+          ...starterExperiments({
+            platform: dataset.platform,
+            posts: dataset.posts,
+            metric,
+            asOf: dataset.asOf,
+            hypotheses,
+            existing: signals,
+          }),
+        ]
+      : signals;
+    const fallbackSummary = starter
+      ? starterSummary(starter, experiments, dataset.posts.length, dataset.platform, metric)
+      : templateSummary(engine.findings, experiments, engine.postsUsed, dataset.platform);
     const counts = countVerdicts(engine.findings);
     const allowed = buildAllowedNumbers(
       [
@@ -431,8 +449,9 @@ export class AutopsyService {
     let summarySource: AnalysisReport["summarySource"] = "template";
     let flagged: string[] = [];
     let alternatives: AnalysisReport["alternatives"] = [];
-    if (useAi && this.options.llm) {
-      const relevant = engine.findings.filter((finding) => finding.verdict !== "insufficient");
+    const relevant = engine.findings.filter((finding) => finding.verdict !== "insufficient");
+    // With nothing beyond "insufficient" there is nothing for the AI to explain.
+    if (useAi && this.options.llm && relevant.length > 0) {
       let narration = await narrate(this.options.llm, {
         findings: relevant,
         allowedNumbers: [...allowed],
@@ -487,6 +506,7 @@ export class AutopsyService {
       findings: engine.findings,
       untested: engine.untested,
       experiments,
+      starter,
       summary,
       summarySource,
       unverifiedNumbers: summarySource === "ai" ? [] : flagged,
@@ -515,20 +535,22 @@ export class AutopsyService {
     if (!report) throw new ServiceError("not_found", "找不到这份报告。");
     const plan = report.experiments.find((item) => item.hypothesisId === input.hypothesisId);
     const finding = report.findings.find((item) => item.hypothesis.id === input.hypothesisId);
-    if (!plan || !finding) throw new ServiceError("not_found", "这份报告里没有这个实验处方。");
+    // Starter plans carry their hypothesis: a new account's claims often have no finding.
+    const hypothesis = plan?.hypothesis ?? finding?.hypothesis;
+    if (!plan || !hypothesis) throw new ServiceError("not_found", "这份报告里没有这个实验处方。");
     const existing = this.experiments.findRunning(
       report.accountName,
       report.platform,
-      finding.hypothesis.claim,
+      hypothesis.claim,
     );
     if (existing) return existing;
     return this.experiments.create({
       platform: report.platform,
       accountName: report.accountName,
       sourceReportId: report.id,
-      hypothesis: finding.hypothesis,
+      hypothesis,
       plan,
-      metric: finding.metric,
+      metric: finding?.metric ?? hypothesis.metric ?? report.metric,
       startedOn: input.startedOn ?? this.today(),
       status: "running",
     });

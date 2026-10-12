@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { platformIds } from "./platforms.js";
+import { platformIds, type MetricKind } from "./platforms.js";
 
 export const PlatformIdSchema = z.enum(platformIds);
 
@@ -224,6 +224,14 @@ export interface Finding {
 export interface ExperimentPlan {
   hypothesisId: string;
   claim: string;
+  /**
+   * "signal": the account's own data leans this way but is not conclusive. "starter": a new
+   * account has too few posts for any signal, so this is a common claim worth testing first.
+   * Missing on plans saved before starter experiments existed, which were all signals.
+   */
+  basis?: "signal" | "starter";
+  /** The claim's full definition, needed to judge the experiment when it has no finding. */
+  hypothesis?: Hypothesis;
   /** Sequence like ["A", "B", "A", "B", …]; A means "with the feature". */
   schedule: Array<"A" | "B">;
   variantA: string;
@@ -312,6 +320,38 @@ export interface UsageSummary {
   costUsd: number | null;
 }
 
+/** A metric where one post differs clearly from the account's typical post. */
+export interface Standout {
+  metric: string;
+  label: string;
+  kind: MetricKind;
+  value: number;
+  /** Median of the account's other settled posts. */
+  typical: number;
+}
+
+export interface PostCheckup {
+  postId: string;
+  title: string;
+  publishedAt: string | null;
+  /** Published too recently for its numbers to have settled; not used as a baseline. */
+  settling: boolean;
+  /** The report's metric, and the median of the account's other settled posts. */
+  value: number | null;
+  typical: number | null;
+  /** Other metrics where this post differs clearly from the typical post, biggest first. */
+  standouts: Standout[];
+}
+
+/** Added to reports on accounts too small for the engine to judge claims. */
+export interface StarterReport {
+  postsSettled: number;
+  /** Settled posts at which the starter view stops being added. */
+  target: number;
+  /** Highest value of the report's metric first. */
+  checkups: PostCheckup[];
+}
+
 export interface AnalysisReport {
   id: string;
   datasetId: string;
@@ -330,6 +370,8 @@ export interface AnalysisReport {
   /** Hypotheses that could not be tested at all, with the reason (e.g. labels missing). */
   untested: Array<{ claim: string; reason: string }>;
   experiments: ExperimentPlan[];
+  /** Per-post checkup for new accounts; null on larger ones, missing on older reports. */
+  starter?: StarterReport | null;
   /** Plain-language summary. AI-written only when every number in it checks out. */
   summary: string;
   summarySource: "ai" | "template";

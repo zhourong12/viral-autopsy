@@ -208,6 +208,38 @@ const hypotheses: HypothesesOutput = {
 };
 
 describe("AI analysis", () => {
+  it("turns a new account's own AI hypotheses into its first experiment", async () => {
+    const llm = new FakeLlm({ label: labelsFor, hypotheses: () => hypotheses });
+    const svc = service(llm, "pro");
+    const titles = ["为什么早餐要吃蛋", "通勤穿搭", "为什么我不再熬夜", "周末做饭", "租房改造"];
+    const dataset = svc.datasets.create({
+      platform: "xiaohongshu",
+      accountName: "新号",
+      source: "file",
+      isSample: false,
+      confirmed: true,
+      asOf: "2026-10-12",
+      importNotes: [],
+      posts: titles.map((title, index) => ({
+        id: `p${index + 1}`,
+        title,
+        publishedAt: `2026-09-0${index + 1}T20:00`,
+        format: null,
+        url: null,
+        metrics: { views: 100 + index * 40, collects: 10 + index },
+      })),
+    });
+    // No "narrate" handler: with only "insufficient" findings the AI has nothing to explain.
+    const report = await svc.analyze({ datasetId: dataset.id, useAi: true });
+
+    expect(report.starter?.postsSettled).toBe(5);
+    expect(report.experiments[0]?.claim).toBe("标题带“为什么”更火");
+    expect(report.experiments[0]?.basis).toBe("starter");
+    expect(report.experiments[0]?.hypothesis?.origin).toBe("ai");
+    expect(report.summarySource).toBe("template");
+    expect(llm.requests.some((request) => request.label.startsWith("narrate"))).toBe(false);
+  });
+
   it("labels, adds valid AI hypotheses, and replaces a summary with bad numbers", async () => {
     const narrations: NarrationOutput[] = [
       { summary: "你的问句标题阅读高 999%。", alternatives: [] },

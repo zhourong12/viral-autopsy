@@ -77,6 +77,50 @@ export function readSinglePostExport(
   return { title: titleFromFileName(fileName), publishedAt, format: null, metrics, url: null };
 }
 
+const separators = new Set(["-", "_", "—", "–", "|", "｜", "丨", "·"]);
+
+/**
+ * Text that every file name repeats, such as a "-笔记数据" an export adds, is not part of any
+ * title. It is removed only when set off by a separator, and only across two or more titles.
+ */
+export function stripSharedAffixes(titles: string[]): { titles: string[]; removed: string[] } {
+  const distinct = [...new Set(titles)].map((title) => Array.from(title));
+  const first = distinct[0];
+  if (!first || distinct.length < 2) return { titles, removed: [] };
+  const shortest = Math.min(...distinct.map((chars) => chars.length));
+  const shared = (at: (chars: string[], i: number) => string | undefined) => {
+    let length = 0;
+    while (length < shortest && distinct.every((chars) => at(chars, length) === at(first, length)))
+      length += 1;
+    return length;
+  };
+  const suffixLength = shared((chars, i) => chars[chars.length - 1 - i]);
+  const prefixLength = shared((chars, i) => chars[i]);
+
+  // Keep the shared part only from its first separator on (suffix) or up to its last (prefix).
+  const suffix = first.slice(first.length - suffixLength);
+  const suffixStart = suffix.findIndex((char) => separators.has(char));
+  const prefix = first.slice(0, prefixLength);
+  const prefixEnd = prefix.findLastIndex((char) => separators.has(char));
+  const cutEnd = suffixStart >= 0 ? suffix.length - suffixStart : 0;
+  const cutStart = prefixEnd >= 0 ? prefixEnd + 1 : 0;
+  if (cutEnd === 0 && cutStart === 0) return { titles, removed: [] };
+
+  const stripped = titles.map((title) => {
+    const chars = Array.from(title);
+    return chars
+      .slice(cutStart, chars.length - cutEnd)
+      .join("")
+      .trim();
+  });
+  if (stripped.some((title) => !title)) return { titles, removed: [] };
+  const removed = [
+    cutStart > 0 ? prefix.slice(0, cutStart).join("").trim() : "",
+    cutEnd > 0 ? suffix.slice(suffixStart).join("").trim() : "",
+  ].filter(Boolean);
+  return { titles: stripped, removed };
+}
+
 /**
  * Posts from files that are each one post's export. Null when a lone file is something else
  * (a per-post table goes through column mapping); several files must all be single-post exports.
@@ -100,15 +144,17 @@ export function postsFromSinglePostExports(
     );
   }
 
+  const readPosts = read.flatMap((item) => (item.post ? [item.post] : []));
+  const cleaned = stripSharedAffixes(readPosts.map((post) => post.title));
   const posts: Post[] = [];
   const seen = new Set<string>();
-  for (const { post } of read) {
-    if (!post) continue;
-    const key = `${post.title}::${post.publishedAt ?? ""}`;
-    if (seen.has(key)) continue;
+  readPosts.forEach((post, index) => {
+    const title = cleaned.titles[index] ?? post.title;
+    const key = `${title}::${post.publishedAt ?? ""}`;
+    if (seen.has(key)) return;
     seen.add(key);
-    posts.push({ id: `p${posts.length + 1}`, ...post });
-  }
+    posts.push({ id: `p${posts.length + 1}`, ...post, title });
+  });
   const found = def.metrics
     .filter((metric) => posts.some((post) => post.metrics[metric.key] !== null))
     .map((metric) => metric.label);
@@ -117,6 +163,11 @@ export function postsFromSinglePostExports(
     `识别到的数据：${found.join("、") || "无"}。`,
     "标题取自文件名，发布时间按数据里最早的记录估算，核对表格时请确认。",
   ];
+  if (cleaned.removed.length > 0) {
+    notes.push(
+      `每个文件名都带着“${cleaned.removed.join("”和“")}”，已从标题里去掉；如果它本来就是标题的一部分，请在表格里改回来。`,
+    );
+  }
   if (posts.length < read.length) {
     notes.push(`合并了 ${read.length - posts.length} 个标题和发布时间都相同的重复文件。`);
   }

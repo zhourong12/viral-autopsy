@@ -313,3 +313,62 @@ describe("experiment API", () => {
     expect(checked.body.experiment.result.rows.length).toBeGreaterThan(0);
   });
 });
+
+describe("new accounts", () => {
+  it("adds a checkup and starter experiments, which can be started without a finding", async () => {
+    const app = build();
+    const notes = [
+      ["早餐这样吃，一周瘦三斤？", "2026-09-02", 1500, 300, 20],
+      ["通勤穿搭 5 套", "2026-09-06", 800, 60, 8],
+      ["租房改造花了 300 块", "2026-09-10", 900, 80, 9],
+      ["第一次露营", "2026-09-14", 700, 70, 10],
+    ] as const;
+    const files = await Promise.all(
+      notes.map(async ([title, startDay, impressions, views, ctrPercent]) => ({
+        fileName: `${title}.xlsx`,
+        content: (await toXlsx(noteExport({ startDay, impressions, views, ctrPercent }))).toString(
+          "base64",
+        ),
+        encoding: "base64",
+      })),
+    );
+    const imported = await request(app)
+      .post("/api/datasets/file")
+      .send({ platform: "xiaohongshu", accountName: "新号", files })
+      .expect(201);
+    const dataset = imported.body.dataset;
+    await request(app)
+      .put(`/api/datasets/${dataset.id}/posts`)
+      .send({ posts: dataset.posts })
+      .expect(200);
+    const analysed = await request(app)
+      .post("/api/analyses")
+      .send({ datasetId: dataset.id, useAi: false })
+      .expect(201);
+    const report = analysed.body.report;
+
+    expect(report.starter.postsSettled).toBe(4);
+    expect(report.starter.checkups[0].title).toBe("早餐这样吃，一周瘦三斤？");
+    expect(report.summary).toContain("现在有 4 篇笔记");
+    expect(report.experiments).toHaveLength(3);
+    expect(report.experiments.every((plan: { basis: string }) => plan.basis === "starter")).toBe(
+      true,
+    );
+
+    // On so few posts some starter claims have no finding at all (no title here is a question);
+    // the plan carries its own hypothesis, so the experiment still starts.
+    const plan = report.experiments.find(
+      (item: { hypothesisId: string }) =>
+        !report.findings.some(
+          (finding: { hypothesis: { id: string } }) => finding.hypothesis.id === item.hypothesisId,
+        ),
+    );
+    expect(plan).toBeDefined();
+    const started = await request(app)
+      .post("/api/experiments")
+      .send({ reportId: report.id, hypothesisId: plan.hypothesisId })
+      .expect(201);
+    expect(started.body.experiment.hypothesis.id).toBe(plan.hypothesisId);
+    expect(started.body.experiment.metric).toBe("views");
+  });
+});

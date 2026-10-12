@@ -98,6 +98,7 @@ export function App() {
         )}
         {view.name === "report" && (
           <ReportPage
+            platforms={platforms}
             reportId={view.reportId}
             onBack={() => setView({ name: "history" })}
             onOpenExperiments={() => setView({ name: "experiments" })}
