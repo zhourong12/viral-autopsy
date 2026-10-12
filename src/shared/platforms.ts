@@ -70,12 +70,15 @@ const publishedAtAliases = [
 ];
 const formatAliases = ["类型", "体裁", "内容类型", "笔记类型", "作品类型", "format", "type"];
 const urlAliases = ["链接", "作品链接", "笔记链接", "文章链接", "url", "link"];
+/** Douyin's 作品列表 export has 审核状态 (公开, 自见, 私密, 审核中…), per public tools' docs. */
+const statusAliases = ["审核状态", "可见状态", "可见范围", "visibility"];
 
 export const columnAliases = {
   title: titleAliases,
   publishedAt: publishedAtAliases,
   format: formatAliases,
   url: urlAliases,
+  status: statusAliases,
 } as const;
 
 const screenshot: ImportPath = {
@@ -210,12 +213,33 @@ export const platforms: Record<PlatformId, PlatformDef> = {
         kind: "duration",
         aliases: ["平均播放时长", "平均观看时长", "avg watch time"],
       },
+      // The next four are columns of the 作品列表 export ("5s完播率", "2s跳出率"); the
+      // account-level export spells them "5秒完播率", "2秒跳出率".
+      {
+        key: "completion5s",
+        label: "5 秒完播率",
+        kind: "rate",
+        aliases: ["5s完播率", "5秒完播率"],
+      },
+      {
+        key: "bounce2s",
+        label: "2 秒跳出率",
+        kind: "rate",
+        aliases: ["2s跳出率", "2秒跳出率"],
+      },
+      { key: "coverCtr", label: "封面点击率", kind: "rate", aliases: ["封面点击率"] },
+      {
+        key: "profileVisits",
+        label: "主页访问",
+        kind: "count",
+        aliases: ["主页访问量", "主页访问", "主页访问数"],
+      },
     ],
     importPaths: [
       {
         kind: "export",
-        status: "unverified",
-        note: "创作者服务中心的数据中心能查看作品数据，没有查到官方导出说明。若你的后台能导出，可直接上传。",
+        status: "documented",
+        note: "创作者中心的数据中心 → 投稿作品 → 投稿列表 → 导出数据（新版在 内容管理 右上角），得到“作品列表”.xlsx，可直接上传。列名按公开项目的说明和由真实导出生成的文件核对过，还没拿到未经改动的原始文件。自见、私密等非公开作品会自动跳过。",
       },
       screenshot,
       paste,
@@ -251,7 +275,7 @@ export const platforms: Record<PlatformId, PlatformDef> = {
       {
         kind: "export",
         status: "unverified",
-        note: "没有查到创作中心导出稿件数据的公开说明。若你的后台能导出，可直接上传。",
+        note: "没有查到创作中心有导出稿件数据的功能（2026-10 查过，第三方工具都是抓取页面）。建议用截图识别，或把数据中心的表格复制粘贴进来。若你的后台能导出，也可以直接上传。",
       },
       screenshot,
       paste,
@@ -305,7 +329,7 @@ export const platforms: Record<PlatformId, PlatformDef> = {
       {
         kind: "export",
         status: "documented",
-        note: "公众号后台的数据分析能导出文章数据（多篇中文资料描述过；具体列名以你的后台为准，导入时会让你确认对应关系）。",
+        note: "公众号后台 数据分析 → 内容分析 能下载数据（中文资料描述过，但没拿到真实文件，列名以你的后台为准，认不出时手动指定一次）。按文章列出的那份才能解剖；按天的趋势表会被识别出来并提示。",
       },
       screenshot,
       paste,

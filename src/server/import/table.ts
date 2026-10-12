@@ -96,6 +96,14 @@ export async function parseImportFile(
   const lower = fileName.toLowerCase();
   if (lower.endsWith(".xlsx")) {
     if (!buffer) throw new ImportError("unsupported_file", "Excel 文件需要以二进制上传。");
+    // Douyin hands out a short JSON error under the .xlsx name when the login has expired
+    // (reported by a public export tool).
+    if (/^\s*[{[]/.test(buffer.subarray(0, 64).toString("utf8"))) {
+      throw new ImportError(
+        "unreadable_file",
+        "这个文件不是表格，而是后台返回的一段错误信息，常见原因是登录过期。请刷新后台页面、重新登录后再导出一次。",
+      );
+    }
     throw new ImportError("unreadable_file", unreadableXlsx);
   }
   if (lower.endsWith(".xls")) throw new ImportError("unsupported_file", xlsNotSupported);

@@ -16,6 +16,8 @@ export interface ColumnMapping {
   publishedAt: number | null;
   format: number | null;
   url: number | null;
+  /** Visibility or review status; rows that were never publicly distributed are skipped. */
+  status: number | null;
   /** Metric key -> column index. */
   metrics: Record<string, number>;
 }
@@ -52,6 +54,7 @@ function fieldSpecs(platform: PlatformId): FieldSpec[] {
     { field: "publishedAt", label: "发布时间", aliases: columnAliases.publishedAt },
     { field: "format", label: "内容形式", aliases: columnAliases.format },
     { field: "url", label: "链接", aliases: columnAliases.url },
+    { field: "status", label: "可见状态", aliases: columnAliases.status },
     ...getPlatform(platform).metrics.map((metric) => ({
       field: `metric:${metric.key}`,
       label: metric.label,
@@ -97,6 +100,7 @@ function toMapping(matches: Map<string, number>): ColumnMapping {
     publishedAt: matches.get("publishedAt") ?? null,
     format: matches.get("format") ?? null,
     url: matches.get("url") ?? null,
+    status: matches.get("status") ?? null,
     metrics,
   };
 }
@@ -137,7 +141,7 @@ function missingParts(mapping: ColumnMapping): string[] {
 export function assignmentOf(result: MappingResult): ColumnAssignment {
   const columns: Array<string | null> = result.headers.map(() => null);
   const { mapping } = result;
-  for (const field of ["title", "publishedAt", "format", "url"] as const) {
+  for (const field of ["title", "publishedAt", "format", "url", "status"] as const) {
     const index = mapping[field];
     if (index !== null) columns[index] = field;
   }
@@ -187,6 +191,24 @@ export function headerCandidates(table: Table): Array<{ row: number; signature: 
 
 const summaryTitles = new Set(["total", "合计", "总计", "汇总", "总和"]);
 
+/**
+ * Statuses of posts that were never distributed to the public. Douyin exports 自见 videos with
+ * 0 plays (per public tools' docs), which would read as flops. Unknown statuses are kept.
+ */
+const hiddenStatuses = new Set([
+  "自见",
+  "仅自己可见",
+  "私密",
+  "好友可见",
+  "未通过",
+  "审核未通过",
+  "不通过",
+  "审核中",
+  "已删除",
+  "private",
+  "unlisted",
+]);
+
 function parseRows(
   table: Table,
   detected: MappingResult,
@@ -207,6 +229,7 @@ function parseRows(
   const seen = new Set<string>();
   let skippedSummary = 0;
   let skippedEmpty = 0;
+  let skippedHidden = 0;
   let duplicates = 0;
   let missingDates = 0;
 
@@ -219,6 +242,11 @@ function parseRows(
       (!title && summaryTitles.has(firstText.toLowerCase()))
     ) {
       skippedSummary += 1;
+      continue;
+    }
+    const status = mapping.status === null ? "" : cellText(row[mapping.status]).toLowerCase();
+    if (hiddenStatuses.has(status)) {
+      skippedHidden += 1;
       continue;
     }
     const metrics: Record<string, number | null> = {};
@@ -270,6 +298,10 @@ function parseRows(
     notes.push(`${missingDates} 条的发布时间无法识别，请在确认表格里补上。`);
   if (skippedSummary > 0) notes.push(`跳过了 ${skippedSummary} 行合计行。`);
   if (skippedEmpty > 0) notes.push(`跳过了 ${skippedEmpty} 行空行。`);
+  if (skippedHidden > 0)
+    notes.push(
+      `跳过了 ${skippedHidden} 条没有公开分发的${platformDef.contentNoun}（自见、私密、审核中等），它们的数据不能和公开的比。`,
+    );
   if (duplicates > 0) notes.push(`合并了 ${duplicates} 条标题和发布时间都相同的重复记录。`);
   if (detected.ignoredHeaders.length > 0)
     notes.push(`未使用的列：${detected.ignoredHeaders.join("、")}。`);

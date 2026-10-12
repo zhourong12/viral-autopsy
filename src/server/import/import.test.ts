@@ -512,3 +512,64 @@ describe("YouTube Studio exports (real layouts)", () => {
     expect(aliasMatches("Video pub­lish time", "video publish time")).toBe(true);
   });
 });
+
+describe("Douyin 作品列表 export (documented layout)", () => {
+  // Header as given by two public tools' docs (2026) and by files built from real exports
+  // (2025); no untouched export was available. Titles and numbers are made up.
+  const header =
+    "作品名称\t发布时间\t体裁\t审核状态\t播放量\t完播率\t5s完播率\t封面点击率\t2s跳出率\t平均播放时长\t点赞量\t分享量\t评论量\t收藏量\t主页访问量\t粉丝增量";
+
+  it("reads every column, with rates as fractions and seconds as decimals", () => {
+    const text = [
+      header,
+      "<title one>\t2025-03-15 17:03:11\t1min-视频\t公开\t226\t0.034483\t0.731278\t-\t0.268722\t2.50655\t3\t0\t1\t0\t4\t1",
+      "<title two>\t2025-03-16 09:30:00\t图文\t公开\t1200\t0.12\t0.5\t0.090909\t0.31\t6.249591\t40\t2\t5\t9\t12\t3",
+    ].join("\n");
+    const result = tableToPosts(parseDelimitedText(text), "douyin", asOf);
+    expect(result.mapping.ignoredHeaders).toEqual([]);
+    const [first, second] = result.posts;
+    expect(first?.publishedAt).toBe("2025-03-15T17:03");
+    expect(first?.format).toBe("video");
+    expect(second?.format).toBe("image");
+    expect(first?.metrics).toMatchObject({
+      views: 226,
+      completionRate: 0.034483,
+      completion5s: 0.731278,
+      coverCtr: null,
+      bounce2s: 0.268722,
+      avgWatchSeconds: 2.50655,
+      profileVisits: 4,
+      follows: 1,
+    });
+    expect(second?.metrics.coverCtr).toBeCloseTo(0.090909);
+  });
+
+  it("skips posts that were never shown publicly, and says so", () => {
+    const text = [
+      header,
+      "<public>\t2025-03-15 17:03:11\t1min-视频\t公开\t226\t0.03\t0.7\t-\t0.2\t2.5\t3\t0\t1\t0\t4\t1",
+      "<hidden>\t2025-03-16 17:03:11\t1min-视频\t自见\t0\t0\t0\t-\t0\t0\t2\t0\t1\t0\t0\t0",
+      "<reviewing>\t2025-03-17 17:03:11\t图文\t审核中\t0\t0\t0\t-\t0\t0\t0\t0\t0\t0\t0\t0",
+    ].join("\n");
+    const result = tableToPosts(parseDelimitedText(text), "douyin", asOf);
+    expect(result.posts.map((post) => post.title)).toEqual(["<public>"]);
+    expect(result.notes.join("")).toContain("跳过了 2 条没有公开分发的作品");
+  });
+
+  it("explains the account's daily export (second-hand layout) instead of mapping it", () => {
+    const text = [
+      "日期,投稿量,总播放量,总点赞量,总分享量,总评论量,5秒完播率,2秒跳出率,封面点击率,平均播放时长",
+      "2026-09-01,1,1200,30,2,4,3.20%,40.10%,5.00%,6.5",
+      "2026-09-02,0,800,12,0,1,2.90%,41.00%,4.10%,5.9",
+      "2026-09-03,2,2600,77,5,9,3.80%,38.20%,6.30%,7.2",
+    ].join("\n");
+    expect(() => tableToPosts(parseDelimitedText(text), "douyin", asOf)).toThrow(/按天汇总/);
+  });
+
+  it("recognises an error body saved under an .xlsx name", async () => {
+    const body = Buffer.from('{"BaseResp":{"StatusCode":1,"StatusMessage":"login expired"}}');
+    await expect(
+      parseImportFile("作品列表导出.xlsx", body.toString("base64"), "base64"),
+    ).rejects.toThrow(/登录过期/);
+  });
+});
