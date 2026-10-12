@@ -203,11 +203,15 @@ export function parsePublishedAt(raw: unknown, asOf: string): string | null {
   return null;
 }
 
-/** Lowercase, half-width, no spaces or colons; full-width brackets become ASCII. */
+/**
+ * Lowercase, half-width, no spaces or colons; full-width brackets become ASCII. Soft hyphens
+ * and zero-width characters go too: YouTube Studio exports have put soft hyphens inside
+ * header words ("Video pub\u00ADlish time", checked on a real 2022 export).
+ */
 export function normalizeHeader(text: string): string {
   return toHalfWidth(text)
     .toLowerCase()
-    .replace(/[\s_：:\uFEFF]/g, "");
+    .replace(/[\s_：:\uFEFF\u00AD\u200B-\u200D\u2060]/g, "");
 }
 
 /** "视频", "图文" and English variants to a content format. */
@@ -221,11 +225,44 @@ export function parseFormat(raw: unknown): "video" | "image" | "article" | null 
   return null;
 }
 
-export function aliasMatches(header: string, alias: string): boolean {
+/** Bracketed units that may follow a metric name: "观看数(人)", "Watch time (hours)". */
+const headerUnits = new Set([
+  "次",
+  "人",
+  "人次",
+  "个",
+  "条",
+  "篇",
+  "%",
+  "s",
+  "秒",
+  "分",
+  "分钟",
+  "min",
+  "小时",
+  "h",
+  "hours",
+  "天",
+  "usd",
+  "元",
+  "万",
+  "w",
+]);
+
+/**
+ * 2 when the header is the alias, 1 when it is the alias plus a bracketed unit, else 0. Other
+ * brackets change the meaning ("Views (co-viewed)" is not "Views"), so they do not match:
+ * a column left unmatched is mapped by hand once, while a wrong match silently skews results.
+ */
+export function aliasMatchStrength(header: string, alias: string): 0 | 1 | 2 {
   const h = normalizeHeader(header);
   const a = normalizeHeader(alias);
-  if (!h || !a) return false;
-  if (h === a) return true;
-  // "观看数(人)", "播放量(次)": the alias followed by a bracketed unit.
-  return h.startsWith(a) && /^\(.*\)$/.test(h.slice(a.length));
+  if (!h || !a) return 0;
+  if (h === a) return 2;
+  const rest = h.startsWith(a) ? h.slice(a.length).match(/^\((.*)\)$/) : null;
+  return rest?.[1] !== undefined && headerUnits.has(rest[1]) ? 1 : 0;
+}
+
+export function aliasMatches(header: string, alias: string): boolean {
+  return aliasMatchStrength(header, alias) > 0;
 }

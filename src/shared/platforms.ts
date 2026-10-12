@@ -329,14 +329,15 @@ export const platforms: Record<PlatformId, PlatformDef> = {
         key: "impressions",
         label: "展示次数",
         kind: "count",
-        aliases: ["impressions", "展示次数"],
+        // Studio renamed these to "Thumbnail …" between 2022 and 2026 (real exports).
+        aliases: ["thumbnail impressions", "impressions", "展示次数"],
       },
       {
         key: "ctr",
         label: "展示点击率",
         kind: "rate",
         aliases: [
-          "impressions click-through rate (%)",
+          "thumbnail click-through rate",
           "impressions click-through rate",
           "click-through rate",
           "展示点击率",
@@ -348,7 +349,15 @@ export const platforms: Record<PlatformId, PlatformDef> = {
         kind: "duration",
         aliases: ["average view duration", "平均观看时长"],
       },
+      {
+        key: "avgPercentViewed",
+        label: "平均观看百分比",
+        kind: "rate",
+        // Above 100% for Shorts watched more than once.
+        aliases: ["average percentage viewed", "平均观看百分比"],
+      },
       { key: "likes", label: "顶", kind: "count", aliases: ["likes", "顶"] },
+      { key: "shares", label: "分享", kind: "count", aliases: ["shares", "分享"] },
       {
         key: "comments",
         label: "评论",
@@ -365,8 +374,8 @@ export const platforms: Record<PlatformId, PlatformDef> = {
     importPaths: [
       {
         kind: "export",
-        status: "documented",
-        note: "YouTube Studio 数据分析可以导出 CSV（第三方教程描述过，没有查到官方帮助页）。导入时会让你确认列的对应关系。",
+        status: "verified",
+        note: "YouTube Studio 数据分析里按视频导出的表格 CSV（每行一个视频，第一行是合计）可以直接上传。已用公开的真实导出文件核对（英文界面，2022 和 2026 年）；中文界面的列名还没核对，认不出时手动指定一次。",
       },
       screenshot,
       paste,

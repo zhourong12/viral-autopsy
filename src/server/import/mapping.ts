@@ -3,7 +3,7 @@ import type { ColumnAssignment, Post, TableImportPreview } from "../../shared/sc
 import { ImportError, maxRows, type Cell, type Table } from "./table.js";
 import { accountLevelMessage } from "./accountLevel.js";
 import {
-  aliasMatches,
+  aliasMatchStrength,
   headerIsPercent,
   normalizeHeader,
   parseFormat,
@@ -69,13 +69,18 @@ function matchHeaders(headers: string[], platform: PlatformId): Map<string, numb
   const assigned = new Map<string, number>();
   const used = new Set<number>();
   for (const spec of fieldSpecs(platform)) {
-    // Aliases are ordered by preference, so the first alias that hits any free column wins.
-    for (const alias of spec.aliases) {
-      const index = headers.findIndex((header, i) => !used.has(i) && aliasMatches(header, alias));
-      if (index >= 0) {
-        assigned.set(spec.field, index);
-        used.add(index);
-        break;
+    // An exact name anywhere beats a name with a unit; within each, aliases are in order of
+    // preference and the first one that hits a free column wins.
+    search: for (const strength of [2, 1] as const) {
+      for (const alias of spec.aliases) {
+        const index = headers.findIndex(
+          (header, i) => !used.has(i) && aliasMatchStrength(header, alias) === strength,
+        );
+        if (index >= 0) {
+          assigned.set(spec.field, index);
+          used.add(index);
+          break search;
+        }
       }
     }
   }

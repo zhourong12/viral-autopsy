@@ -454,3 +454,61 @@ describe("stripSharedAffixes", () => {
     expect(result?.notes.join("")).toContain("“-笔记数据”");
   });
 });
+
+describe("YouTube Studio exports (real layouts)", () => {
+  // Header rows copied verbatim from public Studio exports (2026 and 2022, English UI);
+  // the numbers, titles and IDs are made up. Line 2 is always Studio's Total row.
+  it("prefers the exact Views column over a bracketed variant", () => {
+    const header =
+      "Content,Video title,Video publish time,Duration,Engaged views,Average view duration,Average percentage viewed (%),Stayed to watch (%),Unique viewers,Unique reach,Views (co-viewed),Average views per viewer,New viewers,Returning viewers,Casual viewers,Regular viewers,Subscribers gained,Likes,Shares,Views,Watch time (hours),Subscribers,Thumbnail impressions,Thumbnail click-through rate (%)";
+    const text = [
+      header,
+      "Total,,,,900,0:00:30,61.2,55.1,700,800,950,1.3,,,,,30,120,8,1000,12.5,25,20000,4.8",
+      ' -AbCdEf123,<title one>,"Sep 6, 2026",69,500,0:00:44,109.75,60.2,400,450,520,1.2,,,,,20,80,5,540,6.6,18,9000,5.52',
+    ].join("\n");
+    const result = tableToPosts(parseDelimitedText(text), "youtube", asOf);
+    expect(result.posts).toHaveLength(1);
+    expect(result.posts[0]?.publishedAt).toBe("2026-09-06");
+    expect(result.posts[0]?.metrics).toMatchObject({
+      views: 540,
+      watchHours: 6.6,
+      impressions: 9000,
+      avgViewSeconds: 44,
+      likes: 80,
+      shares: 5,
+      follows: 18,
+    });
+    expect(result.posts[0]?.metrics.ctr).toBeCloseTo(0.0552);
+    expect(result.posts[0]?.metrics.avgPercentViewed).toBeCloseTo(1.0975);
+    expect(result.mapping.ignoredHeaders).toContain("Views (co-viewed)");
+  });
+
+  it("reads headers with soft hyphens inside words", () => {
+    const header =
+      "Video,Video title,Video pub­lish time,Com­ments ad­ded,Shares,Dis­likes,Likes,Sub­scribers lost,Sub­scribers gained,RPM (USD),CPM (USD),Av­er­age per­cent­age viewed (%),Av­er­age view dur­a­tion,Views,Watch time (hours),Sub­scribers,Your es­tim­ated rev­en­ue (USD),Im­pres­sions,Im­pres­sions click-through rate (%)";
+    const text = [
+      header,
+      "Total,,,10,20,1,300,2,40,5.1,9.2,40.5,0:02:10,5000,400.5,38,25.5,90000,4.2",
+      'AbCdEf456,<title two>,"May 8, 2020",3,7,0,90,1,12,4.9,,36.65,0:03:09,1500,120.25,11,7.75,30000,3.14',
+    ].join("\n");
+    const post = tableToPosts(parseDelimitedText(text), "youtube", asOf).posts[0];
+    expect(post?.publishedAt).toBe("2020-05-08");
+    expect(post?.metrics).toMatchObject({
+      views: 1500,
+      comments: 3,
+      impressions: 30000,
+      avgViewSeconds: 189,
+      follows: 11,
+    });
+    expect(post?.metrics.ctr).toBeCloseTo(0.0314);
+  });
+
+  it("only treats unit-like brackets as part of a metric name", () => {
+    expect(aliasMatches("Views (co-viewed)", "views")).toBe(false);
+    expect(aliasMatches("Thumbnail click-through rate (%)", "thumbnail click-through rate")).toBe(
+      true,
+    );
+    expect(aliasMatches("播放量（次）", "播放量")).toBe(true);
+    expect(aliasMatches("Video pub­lish time", "video publish time")).toBe(true);
+  });
+});
