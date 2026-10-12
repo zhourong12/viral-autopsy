@@ -150,15 +150,13 @@ export function createApp(options: AppOptions): express.Express {
 
   app.use((error: unknown, _req: Request, res: Response, _next: NextFunction) => {
     if (error instanceof ZodError) {
-      res
-        .status(400)
-        .json({
-          error: {
-            code: "invalid_request",
-            message: "请求内容不完整或格式不对。",
-            issues: error.issues.slice(0, 5),
-          },
-        });
+      res.status(400).json({
+        error: {
+          code: "invalid_request",
+          message: "请求内容不完整或格式不对。",
+          issues: error.issues.slice(0, 5),
+        },
+      });
       return;
     }
     if (error instanceof ImportError) {
@@ -177,11 +175,9 @@ export function createApp(options: AppOptions): express.Express {
       "type" in error &&
       error.type === "entity.too.large"
     ) {
-      res
-        .status(413)
-        .json({
-          error: { code: "too_large", message: "上传内容太大，请减少截图数量或压缩图片。" },
-        });
+      res.status(413).json({
+        error: { code: "too_large", message: "上传内容太大，请减少截图数量或压缩图片。" },
+      });
       return;
     }
     console.error("未处理的错误：", error instanceof Error ? error.message : error);
