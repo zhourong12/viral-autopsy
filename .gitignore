@@ -1,0 +1,11 @@
+node_modules/
+dist/
+dist-server/
+coverage/
+var/
+eval-results/
+.env
+.env.*
+!.env.example
+*.log
+*.tmp
