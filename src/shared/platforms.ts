@@ -120,15 +120,22 @@ export const platforms: Record<PlatformId, PlatformDef> = {
       { key: "shares", label: "分享", kind: "count", aliases: ["分享", "分享数", "shares"] },
       {
         key: "follows",
-        label: "涨粉",
+        label: "净涨粉",
         kind: "count",
-        aliases: ["涨粉", "涨粉数", "新增粉丝", "followers gained"],
+        // "净涨粉" and "新增关注" are the names in the creator data centre (checked 2026-10-12).
+        aliases: ["净涨粉", "涨粉", "涨粉数", "新增关注", "新增粉丝", "followers gained"],
       },
       {
         key: "coverCtr",
         label: "封面点击率",
         kind: "rate",
         aliases: ["封面点击率", "点击率", "ctr"],
+      },
+      {
+        key: "completionRate",
+        label: "视频完播率",
+        kind: "rate",
+        aliases: ["视频完播率", "完播率"],
       },
     ],
     importPaths: [

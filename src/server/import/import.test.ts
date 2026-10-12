@@ -234,3 +234,26 @@ describe("manual column mapping", () => {
     expect(headerSignature(["笔记 标题", "观看"])).toBe(headerSignature(["笔记标题", "观看"]));
   });
 });
+
+describe("Xiaohongshu data centre names", () => {
+  it("reads every per-note metric name shown in the creator data centre", () => {
+    // Metric names and number styles as shown in the 2026-10 "笔记数据总览" screenshot.
+    const text = [
+      "笔记标题,发布时间,曝光数,观看数,封面点击率,视频完播率,点赞数,评论数,收藏数,分享数,净涨粉",
+      '第一篇,2026-09-20 21:00,"3,643",548,16.9 %,0 %,13,4,1,11,2',
+    ].join("\n");
+    const result = tableToPosts(parseDelimitedText(text), "xiaohongshu", asOf);
+    expect(result.mapping.ignoredHeaders).toEqual([]);
+    expect(result.posts[0]?.metrics).toMatchObject({
+      impressions: 3643,
+      views: 548,
+      likes: 13,
+      comments: 4,
+      collects: 1,
+      shares: 11,
+      follows: 2,
+      completionRate: 0,
+    });
+    expect(result.posts[0]?.metrics.coverCtr).toBeCloseTo(0.169);
+  });
+});
