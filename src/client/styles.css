@@ -751,3 +751,34 @@ details.how dd {
     color: var(--muted);
   }
 }
+.port-titles {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 6px;
+}
+.port-titles li {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid var(--rule);
+  border-radius: 8px;
+  padding: 6px 8px 6px 10px;
+  background: var(--paper);
+}
+.port-body {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  border: 1px solid var(--rule);
+  border-radius: 8px;
+  padding: 10px 12px;
+  background: var(--paper);
+  font-size: 14px;
+  max-height: 420px;
+  overflow-y: auto;
+}
+.port-draft .btn {
+  white-space: nowrap;
+}

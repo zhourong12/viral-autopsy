@@ -8,6 +8,7 @@ import type {
   ExperimentRecord,
   ExperimentResult,
   ExperimentStatus,
+  PortRecord,
   Post,
   PostLabels,
   UsageSummary,
@@ -399,5 +400,43 @@ export class ExperimentStore {
     this.db
       .prepare("UPDATE experiments SET status = ?, updated_at = ? WHERE id = ?")
       .run(status, new Date().toISOString(), id);
+  }
+}
+
+/** Rewrites from the 搬运台, kept so the creator can come back to them. */
+export class PortStore {
+  constructor(private readonly db: Db) {}
+
+  create(input: Omit<PortRecord, "id" | "createdAt">): PortRecord {
+    const now = new Date().toISOString();
+    const record: PortRecord = { id: randomUUID(), createdAt: now, ...input };
+    this.db
+      .prepare("INSERT INTO ports (id, record_json, month, created_at) VALUES (?, ?, ?, ?)")
+      .run(record.id, JSON.stringify(record), now.slice(0, 7), now);
+    return record;
+  }
+
+  get(id: string): PortRecord | null {
+    const row = this.db.prepare("SELECT record_json FROM ports WHERE id = ?").get(id) as
+      { record_json: string } | undefined;
+    return row ? (JSON.parse(row.record_json) as PortRecord) : null;
+  }
+
+  list(): PortRecord[] {
+    const rows = this.db
+      .prepare("SELECT record_json FROM ports ORDER BY created_at DESC LIMIT 50")
+      .all() as Array<{ record_json: string }>;
+    return rows.map((row) => JSON.parse(row.record_json) as PortRecord);
+  }
+
+  delete(id: string): boolean {
+    return this.db.prepare("DELETE FROM ports WHERE id = ?").run(id).changes > 0;
+  }
+
+  countThisMonth(month: string): number {
+    const row = this.db.prepare("SELECT COUNT(*) AS n FROM ports WHERE month = ?").get(month) as {
+      n: number;
+    };
+    return row.n;
   }
 }

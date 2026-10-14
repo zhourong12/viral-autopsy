@@ -10,6 +10,8 @@ import {
   ImportPasteRequestSchema,
   ImportPreviewRequestSchema,
   PlatformIdSchema,
+  PortRequestSchema,
+  PortTranscribeRequestSchema,
   ScreenshotRequestSchema,
   StartExperimentRequestSchema,
   UpdateExperimentRequestSchema,
@@ -63,6 +65,7 @@ export function createApp(options: AppOptions): express.Express {
       ai: { configured: service.aiConfigured, models: options.models },
       plan: options.plan,
       aiAnalysesLeft: service.aiAnalysesLeft(),
+      portsLeft: service.portsLeft(),
     });
   });
 
@@ -150,6 +153,29 @@ export function createApp(options: AppOptions): express.Express {
 
   app.get("/api/experiments", (_req, res) => {
     res.json({ experiments: service.experiments.list() });
+  });
+
+  app.get("/api/ports", (_req, res) => {
+    res.json({ ports: service.ports.list() });
+  });
+
+  app.post("/api/ports/transcribe", async (req, res) => {
+    const body = PortTranscribeRequestSchema.parse(req.body);
+    res.json({ transcript: await service.transcribeForPort(body.images) });
+  });
+
+  app.post("/api/ports", async (req, res) => {
+    const body = PortRequestSchema.parse(req.body);
+    res.status(201).json({ port: await service.createPort(body) });
+  });
+
+  app.get("/api/ports/:id", (req, res) => {
+    res.json({ port: service.requirePort(req.params.id) });
+  });
+
+  app.delete("/api/ports/:id", (req, res) => {
+    const deleted = service.ports.delete(req.params.id);
+    res.status(deleted ? 200 : 404).json({ deleted });
   });
 
   app.post("/api/experiments", (req, res) => {

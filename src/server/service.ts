@@ -5,13 +5,18 @@ import type {
   ColumnAssignment,
   ExperimentRecord,
   ExperimentStatus,
+  Hypothesis,
   ImportPreview,
+  PortExperiment,
+  PortRecord,
+  PortRequest,
+  PortSource,
   Post,
   PostLabels,
   UploadedFile,
   UsageSummary,
 } from "../shared/schemas.js";
-import { emptyLabels } from "../shared/schemas.js";
+import { emptyLabels, portTargetLabels, portTargets } from "../shared/schemas.js";
 import { AiError, type StructuredLlm } from "./ai/llm.js";
 import {
   extractScreenshots,
@@ -26,6 +31,7 @@ import {
   DatasetStore,
   ExperimentStore,
   MappingStore,
+  PortStore,
   UsageStore,
   type StoredDataset,
 } from "./db/stores.js";
@@ -44,14 +50,19 @@ import {
   tableToPosts,
 } from "./import/mapping.js";
 import { postsFromSinglePostExports } from "./import/singlePost.js";
+import { allowedNumbersFor, buildDraft, titleFitsArm } from "./porting/checks.js";
+import { rewriteForPlatforms, transcribePosts } from "./porting/steps.js";
 import { ImportError, parseDelimitedText, parseImportFile, type Table } from "./import/table.js";
 import { generateAccount } from "./synth/synth.js";
 
 export type Plan = "free" | "pro";
 
-export const planLimits: Record<Plan, { aiAnalysesPerMonth: number | null }> = {
-  free: { aiAnalysesPerMonth: 1 },
-  pro: { aiAnalysesPerMonth: null },
+export const planLimits: Record<
+  Plan,
+  { aiAnalysesPerMonth: number | null; portsPerMonth: number | null }
+> = {
+  free: { aiAnalysesPerMonth: 1, portsPerMonth: 5 },
+  pro: { aiAnalysesPerMonth: null, portsPerMonth: null },
 };
 
 export class ServiceError extends Error {
@@ -93,6 +104,7 @@ export class AutopsyService {
   readonly usage: UsageStore;
   readonly mappings: MappingStore;
   readonly experiments: ExperimentStore;
+  readonly ports: PortStore;
   private readonly today: () => string;
 
   constructor(private readonly options: ServiceOptions) {
@@ -104,6 +116,7 @@ export class AutopsyService {
       options.db,
       (platform, metric) => metricDef(platform as PlatformId, metric)?.label ?? metric,
     );
+    this.ports = new PortStore(options.db);
     this.today = options.today ?? localToday;
   }
 
@@ -593,6 +606,144 @@ export class AutopsyService {
     this.requireExperiment(id);
     this.experiments.setStatus(id, status);
     return this.requireExperiment(id);
+  }
+
+  // -------------------------------------------------------------------------
+  // 搬运台
+
+  portsLeft(): number | null {
+    const limit = planLimits[this.options.plan].portsPerMonth;
+    if (limit === null) return null;
+    return Math.max(0, limit - this.ports.countThisMonth(new Date().toISOString().slice(0, 7)));
+  }
+
+  /** Screenshots of X posts to text the user can correct. Nothing is stored. */
+  async transcribeForPort(
+    images: ScreenshotImage[],
+  ): Promise<{ text: string; author: string | null; notes: string[]; uncertain: string[] }> {
+    const transcript = await transcribePosts(this.requireLlm(), images);
+    this.recordUsage(null, "port-transcribe", transcript.usage);
+    return {
+      text: transcript.text,
+      author: transcript.author,
+      notes: transcript.notes,
+      uncertain: transcript.uncertain,
+    };
+  }
+
+  /** The running experiment a rewrite should follow, checked against the chosen platforms. */
+  private portExperiment(input: PortRequest): {
+    record: PortExperiment;
+    hypothesis: Hypothesis;
+    titleRule: string | null;
+  } | null {
+    if (!input.experiment) return null;
+    const experiment = this.requireExperiment(input.experiment.id);
+    if (experiment.status !== "running") {
+      throw new ServiceError("experiment_mismatch", "这个实验已经结束或放弃了。");
+    }
+    const platform = portTargets.find((target) => target === experiment.platform);
+    if (!platform) {
+      throw new ServiceError(
+        "experiment_mismatch",
+        "搬运台只写小红书、公众号和抖音，这个实验不是这三个平台的。",
+      );
+    }
+    if (!input.targets.includes(platform)) {
+      throw new ServiceError(
+        "experiment_mismatch",
+        `这个实验是${getPlatform(platform).label}的，请在目标平台里选上它。`,
+      );
+    }
+    const { arm } = input.experiment;
+    const variant = arm === "A" ? experiment.plan.variantA : experiment.plan.variantB;
+    const checkable = titleFitsArm(experiment.hypothesis, arm, "示例标题") !== null;
+    return {
+      record: { id: experiment.id, claim: experiment.hypothesis.claim, arm, variant, platform },
+      hypothesis: experiment.hypothesis,
+      titleRule: checkable
+        ? `只对 ${platform} 的标题：这篇属于实验 ${arm} 组，三个标题都必须做到“${variant}”。`
+        : null,
+    };
+  }
+
+  async createPort(input: PortRequest): Promise<PortRecord> {
+    const llm = this.requireLlm();
+    if (this.portsLeft() === 0) {
+      throw new ServiceError(
+        "plan_limit",
+        `免费版每月可以搬运 ${planLimits[this.options.plan].portsPerMonth} 次，本月已用完。`,
+      );
+    }
+    const experiment = this.portExperiment(input);
+    const source: PortSource = {
+      text: input.source.text,
+      author: input.source.author || null,
+      url: input.source.url || null,
+    };
+    const allowed = allowedNumbersFor(source, input.myTake);
+    const { output, usage, retried } = await rewriteForPlatforms(llm, {
+      source,
+      myTake: input.myTake,
+      targets: input.targets,
+      titleRule: experiment?.titleRule ?? null,
+      allowed,
+    });
+
+    const drafts = input.targets.flatMap((target) => {
+      const raw = output.drafts.find((draft) => draft.platform === target);
+      return raw
+        ? [
+            buildDraft(raw, {
+              source,
+              allowed,
+              experiment: experiment
+                ? {
+                    hypothesis: experiment.hypothesis,
+                    arm: experiment.record.arm,
+                    variant: experiment.record.variant,
+                    platform: experiment.record.platform,
+                  }
+                : null,
+            }),
+          ]
+        : [];
+    });
+    const warnings: string[] = [];
+    const missing = input.targets.filter((target) => !drafts.some((d) => d.platform === target));
+    if (missing.length > 0) {
+      warnings.push(
+        `AI 没有写出${missing.map((target) => portTargetLabels[target]).join("、")}，可以再生成一次。`,
+      );
+    }
+    if (!input.myTake.trim()) {
+      warnings.push(
+        "没有写你自己的观点：这篇基本是翻译改写，发布时不要勾选原创声明。加上你的实测或看法，内容更站得住，也更不像搬运。",
+      );
+    }
+    if (retried) {
+      warnings.push("第一版用了原文里没有的数字，已让 AI 重写一次；还剩下的会在各平台下面标出来。");
+    }
+
+    const record = this.ports.create({
+      source,
+      myTake: input.myTake,
+      experiment: experiment?.record ?? null,
+      summary: output.summary.trim(),
+      checks: output.checks.filter((item) => item.claim.trim()),
+      context: output.context.map((item) => item.trim()).filter(Boolean),
+      drafts,
+      warnings,
+      usage,
+    });
+    this.recordUsage(record.id, "port", usage);
+    return record;
+  }
+
+  requirePort(id: string): PortRecord {
+    const record = this.ports.get(id);
+    if (!record) throw new ServiceError("not_found", "找不到这条搬运记录。");
+    return record;
   }
 }
 

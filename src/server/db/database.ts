@@ -82,6 +82,19 @@ export const migrations: Array<{ version: number; name: string; sql: string }> =
       CREATE INDEX experiments_created ON experiments (created_at DESC);
     `,
   },
+  {
+    version: 3,
+    name: "porting drafts",
+    sql: `
+      CREATE TABLE ports (
+        id TEXT PRIMARY KEY,
+        record_json TEXT NOT NULL,
+        month TEXT NOT NULL,
+        created_at TEXT NOT NULL
+      );
+      CREATE INDEX ports_created ON ports (created_at DESC);
+    `,
+  },
 ];
 
 export function migrate(db: Db): number[] {

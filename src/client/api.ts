@@ -4,6 +4,8 @@ import type {
   ColumnAssignment,
   ExperimentRecord,
   ImportPreview,
+  PortRecord,
+  PortRequest,
   Post,
   PostLabels,
   UploadedFile,
@@ -53,6 +55,7 @@ export interface Health {
   ai: { configured: boolean; models: { vision: string; label: string; reason: string } | null };
   plan: string;
   aiAnalysesLeft: number | null;
+  portsLeft: number | null;
 }
 
 export class ApiError extends Error {
@@ -156,6 +159,13 @@ export const api = {
     call<{ report: AnalysisReport }>("POST", "/api/analyses", body),
   analyses: () => call<{ analyses: AnalysisListItem[] }>("GET", "/api/analyses"),
   analysis: (id: string) => call<{ report: AnalysisReport }>("GET", `/api/analyses/${id}`),
+  ports: () => call<{ ports: PortRecord[] }>("GET", "/api/ports"),
+  transcribePort: (images: Array<{ mediaType: "image/jpeg"; data: string }>) =>
+    call<{
+      transcript: { text: string; author: string | null; notes: string[]; uncertain: string[] };
+    }>("POST", "/api/ports/transcribe", { images }),
+  createPort: (body: PortRequest) => call<{ port: PortRecord }>("POST", "/api/ports", body),
+  deletePort: (id: string) => call<{ deleted: boolean }>("DELETE", `/api/ports/${id}`),
   experiments: () => call<{ experiments: ExperimentRecord[] }>("GET", "/api/experiments"),
   startExperiment: (body: { reportId: string; hypothesisId: string }) =>
     call<{ experiment: ExperimentRecord }>("POST", "/api/experiments", body),

@@ -6,6 +6,7 @@ import { ErrorText } from "./components/ui.js";
 import { ExperimentsPage } from "./pages/ExperimentsPage.js";
 import { HistoryPage } from "./pages/HistoryPage.js";
 import { NewAutopsy } from "./pages/NewAutopsy.js";
+import { PortPage } from "./pages/PortPage.js";
 import { ReportPage } from "./pages/ReportPage.js";
 import { SettingsPage } from "./pages/SettingsPage.js";
 
@@ -14,6 +15,7 @@ type View =
   | { name: "history" }
   | { name: "report"; reportId: string }
   | { name: "experiments" }
+  | { name: "port" }
   | { name: "settings" };
 
 export function App() {
@@ -38,6 +40,7 @@ export function App() {
     ["new", "新的解剖"],
     ["history", "报告与数据"],
     ["experiments", "实验"],
+    ["port", "X 搬运"],
     ["settings", "设置"],
   ];
 
@@ -63,6 +66,7 @@ export function App() {
                 if (name === "new") setView({ name: "new", datasetId: null, key: Date.now() });
                 else if (name === "history") setView({ name: "history" });
                 else if (name === "experiments") setView({ name: "experiments" });
+                else if (name === "port") setView({ name: "port" });
                 else setView({ name: "settings" });
                 refresh();
               }}
@@ -105,6 +109,7 @@ export function App() {
           />
         )}
         {view.name === "experiments" && <ExperimentsPage platforms={platforms} />}
+        {view.name === "port" && <PortPage health={health} onUsed={refresh} />}
         {view.name === "settings" && <SettingsPage health={health} onTokenSaved={refresh} />}
       </main>
     </div>

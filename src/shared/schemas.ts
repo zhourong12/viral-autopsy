@@ -511,3 +511,90 @@ export const AnalyzeRequestSchema = z.object({
   metric: z.string().min(1).max(40).optional(),
   useAi: z.boolean().default(true),
 });
+
+// ---------------------------------------------------------------------------
+// 搬运台: rewriting public posts from X for domestic platforms, with attribution.
+
+export const portTargets = ["xiaohongshu", "wechat", "douyin"] as const;
+export type PortTarget = (typeof portTargets)[number];
+export const portTargetLabels: Record<PortTarget, string> = {
+  xiaohongshu: "小红书笔记",
+  wechat: "公众号文章",
+  douyin: "抖音口播稿",
+};
+
+export interface PortSource {
+  /** The original post or thread, as the user confirmed it. */
+  text: string;
+  /** Display name or @handle of the original author. */
+  author: string | null;
+  url: string | null;
+}
+
+/** A problem found by code, not by the model. */
+export interface PortFlag {
+  kind: "number" | "limit" | "link" | "wording" | "experiment" | "credit";
+  text: string;
+}
+
+export interface PortDraft {
+  platform: PortTarget;
+  titles: string[];
+  /** 公众号 only: the summary shown in the feed. */
+  digest: string | null;
+  body: string;
+  tags: string[];
+  /** Attribution line, written by code from the source fields. */
+  credit: string;
+  flags: PortFlag[];
+}
+
+export interface PortExperiment {
+  id: string;
+  claim: string;
+  arm: "A" | "B";
+  /** What this arm asks for, e.g. "标题写成问句". */
+  variant: string;
+  platform: PortTarget;
+}
+
+export interface PortRecord {
+  id: string;
+  createdAt: string;
+  source: PortSource;
+  myTake: string;
+  experiment: PortExperiment | null;
+  /** One sentence on what the original says. */
+  summary: string;
+  /** Claims to verify before publishing: prices, dates, availability, benchmark numbers. */
+  checks: Array<{ claim: string; why: string }>;
+  /** Background a Chinese reader needs that the original assumes. */
+  context: string[];
+  drafts: PortDraft[];
+  warnings: string[];
+  usage: UsageSummary[];
+}
+
+const ImageSchema = z.object({
+  mediaType: z.enum(["image/png", "image/jpeg", "image/webp"]),
+  data: z.string().min(1).max(8_000_000),
+});
+
+export const PortTranscribeRequestSchema = z.object({
+  images: z.array(ImageSchema).min(1).max(6),
+});
+
+export const PortRequestSchema = z.object({
+  source: z.object({
+    text: z.string().trim().min(1).max(20_000),
+    author: z.string().trim().max(80).nullable(),
+    url: z.string().trim().max(500).nullable(),
+  }),
+  targets: z.array(z.enum(portTargets)).min(1).max(3),
+  myTake: z.string().trim().max(3000).default(""),
+  experiment: z
+    .object({ id: z.string().min(1), arm: z.enum(["A", "B"]) })
+    .nullable()
+    .default(null),
+});
+export type PortRequest = z.infer<typeof PortRequestSchema>;
